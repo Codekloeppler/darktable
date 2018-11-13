@@ -932,6 +932,7 @@ static int pwg_createCategoryPath(dt_module_imageio_storage_piwigo_context_t *co
         // add target to array
     	  printf("Target found: '%s'\n", target->str);
         targetsArray[targetsPosition] = g_string_new(target->str);
+        printf("targetsArray[%lu] == %s\n", targetsPosition,(targetsArray[targetsPosition])->str);
         targetsPosition++;
         g_string_truncate(target,0);
       }
@@ -953,17 +954,17 @@ static int pwg_createCategoryPath(dt_module_imageio_storage_piwigo_context_t *co
   if ( callPWG(context, response, NULL, DT_PIWIGO_API_CATEGORY_GET_ADMINLIST) ) {
     pwg_debug("Calling Json Parser:\n%s\n---\n", __FILE__, __LINE__, response->str);
 
-    //JsonObject *rootObject = parse_json_response(context, response);
-    JsonNode *rootNode = json_parser_get_root(context->parser);
+    JsonObject *rootObject = parse_json_response(context, response);
+    //JsonNode *rootNode = json_parser_get_root(context->parser);
     
-    if ( rootNode ) {
+    if ( rootObject ) {
       //size_t catId = 0;
 
-      for ( int i = 0; i <= targetsPosition; i++ ) {
+      for ( int i = 0; i < targetsPosition; i++ ) {
         //char expression[2048];
         //int count = 0;
         
-        printf("DEBUG: [%s:%d] Target-%02d : '%s'\n", __FILE__, __LINE__, i, (targetsArray[i])->str); 
+        printf("DEBUG: [Line %d] Target-%d : '%s'\n", __LINE__, i, (targetsArray[i])->str);
         
         /* JSON path query
         $.result.categories[?(@ && /Exkursionen/.test(@.name) )].id
