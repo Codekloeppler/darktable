@@ -957,11 +957,11 @@ static int pwg_createCategoryPath(dt_module_imageio_storage_piwigo_context_t *co
     JsonNode *rootNode = json_parser_get_root(context->parser);
     
     if ( rootNode ) {
-      size_t catId = 0;
+      //size_t catId = 0;
 
       for ( int i = 0; i <= targetsPosition; i++ ) {
-        char expression[2048];
-        int count = 0;
+        //char expression[2048];
+        //int count = 0;
         
         printf("DEBUG: [%s:%d] Target-%02d : '%s'\n", __FILE__, __LINE__, i, (targetsArray[i])->str); 
         
@@ -988,19 +988,19 @@ static int pwg_createCategoryPath(dt_module_imageio_storage_piwigo_context_t *co
         
         //pwg_debug("Target-%02d : '%s'\n", __FILE__, __LINE__, i, (targetsArray[i])->str); 
 
-        if ( catId > 0 ) {
-        	count = sprintf(expression, "$.result.categories[?(@.id_uppercat==%s) and ?(@.name==%s].id", "null", (targetsArray[i])->str);
-        }
-        else {
-        	count = sprintf(expression, "$.result.categories[?(@.id_uppercat==%lu) and ?(@.name==%s].id", catId, (targetsArray[i])->str);
-        }
-        if ( count > 0 && count < 2048 ) {
-          JsonNode * catResult = json_path_query(expression, rootNode, NULL);
-          
-          catId = json_node_get_int(catResult);
-          
-          pwg_debug("Target-%02d : '%s'\n", __FILE__, __LINE__, i, (targetsArray[i])->str); 
-        }
+//        if ( catId > 0 ) {
+//        	count = sprintf(expression, "$.result.categories[?(@.id_uppercat==%s) and ?(@.name==%s].id", "null", (targetsArray[i])->str);
+//        }
+//        else {
+//        	count = sprintf(expression, "$.result.categories[?(@.id_uppercat==%lu) and ?(@.name==%s].id", catId, (targetsArray[i])->str);
+//        }
+//        if ( count > 0 && count < 2048 ) {
+//          JsonNode * catResult = json_path_query(expression, rootNode, NULL);
+//
+//          catId = json_node_get_int(catResult);
+//
+//          pwg_debug("Target-%02d : '%s'\n", __FILE__, __LINE__, i, (targetsArray[i])->str);
+//        }
       }
     }
   }
