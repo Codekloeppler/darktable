@@ -958,7 +958,7 @@ static int pwg_createCategoryPath(dt_module_imageio_storage_piwigo_context_t *co
     
     if ( rootNode ) {
       size_t catId = 0;
-      // Jetzt für jeden Teil des Zielpfades die Schleife durchlaufen
+
       for ( int i = 0; i <= targetsPosition; i++ ) {
         char expression[2048];
         int count = 0;
@@ -986,8 +986,8 @@ static int pwg_createCategoryPath(dt_module_imageio_storage_piwigo_context_t *co
         ]
         */
         
-        
-        
+        //pwg_debug("Target-%02d : '%s'\n", __FILE__, __LINE__, i, (targetsArray[i])->str); 
+
         if ( catId > 0 ) {
         	count = sprintf(expression, "$.result.categories[?(@.id_uppercat==%s) and ?(@.name==%s].id", "null", (targetsArray[i])->str);
         }
