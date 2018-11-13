@@ -1,0 +1,29 @@
+{
+	"Request": "https://www.consensionis.de/Album/ws.php?format=json&method=pwg.session.getStatus",
+	"Response": {
+		"stat": "ok",
+		"result": {
+			"username": "sven",
+			"status": "webmaster",
+			"theme": "clear",
+			"language": "de_DE",
+			"pwg_token": "d27dcd13156531081ecd7e1188972ab8",
+			"charset": "utf-8",
+			"current_datetime": "2018-11-06 08:30:54",
+			"version": "2.9.4",
+			"available_sizes": [
+				"square",
+				"thumb",
+				"2small",
+				"xsmall",
+				"small",
+				"medium",
+				"large",
+				"xlarge",
+				"xxlarge"
+			],
+			"upload_file_types": "jpg,jpeg,png,gif",
+			"upload_form_chunk_size": 500
+		}
+	}
+}

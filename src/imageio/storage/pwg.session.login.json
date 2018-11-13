@@ -1,0 +1,20 @@
+{
+	"Request": {
+		"url": "http://piwigo.org/demo/ws.php?format=json&method=pwg.session.login",
+		"post": {
+			"username": "foobar",
+			"password": "barbaz"
+		}
+	},
+	"Response": [
+		{
+			"stat": "fail",
+			"err": 999,
+			"message": "Invalid username/password"
+		},
+		{
+			"stat": "ok",
+			"result": true
+		}
+	]
+}
