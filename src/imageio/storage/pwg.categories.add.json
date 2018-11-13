@@ -1,0 +1,10 @@
+{
+	"Request": "https://www.consensionis.de/Album/ws.php?format=json&method=pwg.categories.add&name=Foobar&parent=6&comment=Ein Beispiel Album&visible=true&status=public&commentable=true",
+	"Response": {
+		"stat": "ok",
+		"result": {
+			"info": "Virtuelles Album hinzugefügt",
+			"id": 384
+		}
+	}
+}

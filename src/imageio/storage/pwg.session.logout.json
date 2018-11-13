@@ -1,0 +1,7 @@
+{
+	"Request": "http://piwigo.org/demo/ws.php?format=json&method=pwg.session.logout",
+	"Response": {
+		"stat": "ok",
+		"result": true
+	}
+}

@@ -1,0 +1,9 @@
+{
+	"Request": "https://www.consensionis.de/Album/ws.php?format=json&method=pwg.images.checkUpload",
+	"Response": {
+		"stat": "ok",
+		"result": {
+			"message": null,
+			"ready_for_upload": true
+		}
+	}

@@ -1,0 +1,21 @@
+{
+	"Request": {
+		"url": "https://www.consensionis.de/Album/ws.php?format=json",
+		"post": {
+			"category": "6",
+			"name": "Foobar Image",
+			"author": "Sven Fröhlich",
+			"comment": "Ein Beispiel Upload-Foto",
+			"level": "0",
+			"tags": [
+				"Foo",
+				"Bar",
+				"Baz"
+			]
+		}
+	},
+	"Response": {
+		"stat": "fail",
+		"err": 405,
+		"message": "The image (file) is missing"
+	}

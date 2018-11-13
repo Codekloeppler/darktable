@@ -1,0 +1,60 @@
+{
+	"Request": "https://www.consensionis.de/Album/ws.php?format=json&method=reflection.getMethodDetails&methodName=pwg.images.addSimple",
+	"Response": {
+		"stat": "ok",
+		"result": {
+			"name": "pwg.images.addSimple",
+			"description": "Add an image.\n<br>Use the <b>$_FILES[image]</b> field for uploading file.\n<br>Set the form encoding to \"form-data\".\n<br>You can update an existing photo if you define an existing image_id.",
+			"params": [
+				{
+					"name": "category",
+					"optional": true,
+					"acceptArray": true,
+					"type": "int positive notnull"
+				},
+				{
+					"name": "name",
+					"optional": true,
+					"acceptArray": false,
+					"type": "mixed"
+				},
+				{
+					"name": "author",
+					"optional": true,
+					"acceptArray": false,
+					"type": "mixed"
+				},
+				{
+					"name": "comment",
+					"optional": true,
+					"acceptArray": false,
+					"type": "mixed"
+				},
+				{
+					"name": "level",
+					"optional": true,
+					"acceptArray": false,
+					"type": "int positive",
+					"defaultValue": 0,
+					"maxValue": 8
+				},
+				{
+					"name": "tags",
+					"optional": true,
+					"acceptArray": true,
+					"type": "mixed"
+				},
+				{
+					"name": "image_id",
+					"optional": true,
+					"acceptArray": false,
+					"type": "int positive notnull"
+				}
+			],
+			"options": {
+				"admin_only": true,
+				"post_only": true
+			}
+		}
+	}
+}
