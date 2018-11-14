@@ -18,11 +18,10 @@
 
 /* Ablauf beim Darktable Start:
 
-* Laden der/des Plugins -> init()
-* Anzeige des Plugins   -> gui_init()
-                          => Lesen der Konfigurationsdaten 
-
-* Beenden von Dartable  -> gui_cleanup()
+* Starten des Darktable executables         -> init()
+* Starten der Darktable GUI, wenn nicht CLI -> gui_init()
+                                               => Lesen der Konfigurationsdaten 
+* Beenden von Darktable                     -> gui_cleanup()
 
 */
 
@@ -105,6 +104,7 @@ typedef struct dt_module_imageio_storage_piwigo_ui
   GtkWidget *password;
   GtkWidget *password_label;
   GtkWidget *login_button;
+  dt_module_imageio_storage_piwigo_context *context;
 } dt_module_imageio_storage_piwigo_ui_t;
 
 typedef struct dt_module_imageio_storage_piwigo_auth
@@ -117,7 +117,7 @@ typedef struct dt_module_imageio_storage_piwigo_auth
 
 typedef struct dt_module_imageio_storage_piwigo_context
 {
-  dt_module_imageio_storage_piwigo_ui_t *ui;
+  //dt_module_imageio_storage_piwigo_ui_t *ui;
   dt_module_imageio_storage_piwigo_auth_t *auth;
   char *site;
   char *path;
@@ -128,7 +128,9 @@ typedef struct dt_module_imageio_storage_piwigo_context
 
 
 // STATIC FUNCTION PROTOTYPES
-static void init_context(dt_module_imageio_storage_piwigo_context_t **context);
+static void pwg_init(dt_module_imageio_storage_piwigo_ui_t **ui);
+
+
 static void clicked_login_button(GtkWidget *widget, dt_imageio_module_storage_t *self);
 static void config_changed_callback(GtkEntry *entry, gpointer user_data);
 static size_t curl_write_data_callback(void *ptr, size_t size, size_t nmemb, void *data);
@@ -137,46 +139,50 @@ static gboolean pwg_login(dt_module_imageio_storage_piwigo_context_t *context);
 static gboolean pwg_logout(dt_module_imageio_storage_piwigo_context_t *context);
 //static gboolean callREST(GString *response, dt_module_imageio_storage_piwigo_context_t *context, GString *method);
 static gboolean callPWG(dt_module_imageio_storage_piwigo_context_t *context, GString *response, const char* postdata, const char *method);
-static int pwg_createCategoryPath(dt_module_imageio_storage_piwigo_context_t *context, const char * path);
+static int pwg_createCategoryPath(dt_module_imageio_storage_piwigo_contextpiwigo_context_t *context, const char * path);
 static void pwg_debug(const char *format, const char *file, size_t line, ...);
+static void _finalize_store(gpointer user_data);
+static void ui_refresh_albums_fill(PicasaAlbum *album, GtkListStore *list_store);
 
-/* get module version */
+// defined in imagio_storage_api.h
 int version()
 {
   return DT_PIWIGO_VERSION;
 }
 
-/* get translated module name */
+// defined in imagio_storage_api.h
 const char *name(const struct dt_imageio_module_storage_t *self)
 {
   return _(DT_PIWIGO_NAME);
 }
 
+// defined in imagio_storage_api.h
 void init(dt_imageio_module_storage_t *self)
 {
-  dt_module_imageio_storage_piwigo_context_t * context = (dt_module_imageio_storage_piwigo_context_t *) self->gui_data;
-  init_context(&context);
+  dt_module_imageio_storage_piwigo_ui_t * ui = (dt_module_imageio_storage_piwigo_ui_t *) self->gui_data; 
+  dt_control_log(_("call pwg_init() inside init()"));
+  pwg_init(&ui);
 }
 
 /* allow the module to initialize itself */
-void  init_context(dt_module_imageio_storage_piwigo_context_t **context)
+void  pwg_init(dt_module_imageio_storage_piwigo_ui_t **ui)
 {
-  if ( !*context )
+  if ( !*ui )
   {
-    *context = (dt_module_imageio_storage_piwigo_context_t *)malloc(sizeof(dt_module_imageio_storage_piwigo_context_t));
-    (*context)->ui = (dt_module_imageio_storage_piwigo_ui_t *) malloc(sizeof(dt_module_imageio_storage_piwigo_ui_t));
-    (*context)->auth = (dt_module_imageio_storage_piwigo_auth_t *) malloc(sizeof(dt_module_imageio_storage_piwigo_auth_t));
+    *ui = (dt_module_imageio_storage_piwigo_ui_t *) g_malloc0(sizeof(dt_module_imageio_storage_piwigo_ui_t));
+    (*ui)->context = (dt_module_imageio_storage_piwigo_context_t *) g_malloc0(sizeof(dt_module_imageio_storage_piwigo_context_t));
+    (*ui)->context->auth = (dt_module_imageio_storage_piwigo_auth_t *) g_malloc0(sizeof(dt_module_imageio_storage_piwigo_auth_t));
   }
-      
-  (*context)->auth->sslPeer = TRUE;
-  (*context)->auth->registered = FALSE;
-  (*context)->auth->username = NULL;
-  (*context)->auth->token = NULL;
-  (*context)->site = NULL;
-  (*context)->path = NULL;
-  (*context)->params = NULL;
-  (*context)->parser = json_parser_new ();
-  (*context)->supported_file_types = NULL;  
+
+  (*ui)->context->auth->sslPeer = TRUE;
+  (*ui)->context->auth->registered = FALSE;
+  (*ui)->context->auth->username = NULL;
+  (*ui)->context->auth->token = NULL;
+  (*ui)->context->site = NULL;
+  (*ui)->context->path = NULL;
+  (*ui)->context->params = NULL;
+  (*ui)->context->parser = json_parser_new();
+  (*ui)->context->supported_file_types = NULL;
   
   return;
   
@@ -210,17 +216,18 @@ void gui_init(struct dt_imageio_module_storage_t *self)
   GtkWidget *hboxPass;
   GtkWidget *hboxLogin;
   GtkWidget *hboxAlbum;
-  dt_module_imageio_storage_piwigo_context_t *context = NULL;
+  dt_module_imageio_storage_piwigo_ui_t *ui = NULL;
 
-  init_context(&context);
+  dt_control_log(_("call pwg_init() inside gui_init()"));
+  pwg_init(&ui);
   // Prevent double initialization (might be already done in init()!?)
 
-  self->gui_data = (void *)context;
+  self->gui_data = (void *)ui;
   
   //darktable module layout container
   self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_PIXEL_APPLY_DPI(5));
 
-  // LAYOUT CONTAINERS
+  // LAYOUT CONTAINERS -->
   // add module preferences layout container
   vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_PIXEL_APPLY_DPI(8));
   gtk_box_pack_start(GTK_BOX(self->widget), GTK_WIDGET(vbox), TRUE, FALSE, 0);
@@ -243,104 +250,112 @@ void gui_init(struct dt_imageio_module_storage_t *self)
   
   // add album path preference layout container
   hboxAlbum = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, DT_PIXEL_APPLY_DPI(8));
-  gtk_box_pack_start(GTK_BOX(vbox), GTK_WIDGET(hboxAlbum), TRUE, FALSE, 0);  
+  gtk_box_pack_start(GTK_BOX(vbox), GTK_WIDGET(hboxAlbum), TRUE, FALSE, 0);
 
+  //<-- END OF LAYOUT CONTAINERS
+  
+  // WIDGETS -->
   // add site label
-  context->ui->site_label = gtk_label_new(_("Server"));
-  gtk_box_pack_start(GTK_BOX(hboxUrl), GTK_WIDGET(context->ui->site_label), TRUE, FALSE, 0);
+  ui->site_label = gtk_label_new(_("Server"));
+  gtk_box_pack_start(GTK_BOX(hboxUrl), GTK_WIDGET(ui->site_label), TRUE, FALSE, 0);
   
   // add site input with tooltip
-  context->ui->site = gtk_entry_new();
-  gtk_box_pack_start(GTK_BOX(hboxUrl), GTK_WIDGET(context->ui->site), TRUE, TRUE, 0);
-  gtk_widget_set_tooltip_text(context->ui->site, _("piwigo server site"));
-  gtk_entry_set_width_chars(GTK_ENTRY(context->ui->site), 0);
+  ui->site = gtk_entry_new();
+  gtk_box_pack_start(GTK_BOX(hboxUrl), GTK_WIDGET(ui->site), TRUE, TRUE, 0);
+  gtk_widget_set_tooltip_text(ui->site, _("piwigo server site"));
+  gtk_entry_set_width_chars(GTK_ENTRY(ui->site), 0);
   
   // fill site input with config  
   gchar *url = dt_conf_get_string("plugins/imageio/storage/piwigo/site");
   if(url)
   {
-    gtk_entry_set_text(GTK_ENTRY(context->ui->site), url);
+    gtk_entry_set_text(GTK_ENTRY(ui->site), url);
     g_free(url);
   }  
   // add callback to write changed config
-  g_signal_connect(context->ui->site, "changed", G_CALLBACK(config_changed_callback), self);
+  g_signal_connect(ui->site, "changed", G_CALLBACK(config_changed_callback), self);
   
   // disable darktable hotkeys, when site field has focus
-  dt_gui_key_accel_block_on_focus_connect(GTK_WIDGET(context->ui->site));
+  dt_gui_key_accel_block_on_focus_connect(GTK_WIDGET(ui->site));
   
   // add username label
-  context->ui->username_label = gtk_label_new(_("Username"));
-  gtk_box_pack_start(GTK_BOX(hboxUser), GTK_WIDGET(context->ui->username_label), TRUE, FALSE, 0);
+  ui->username_label = gtk_label_new(_("Username"));
+  gtk_box_pack_start(GTK_BOX(hboxUser), GTK_WIDGET(ui->username_label), TRUE, FALSE, 0);
   
   // add username input with tooltip
-  context->ui->username = gtk_entry_new();
-  gtk_box_pack_start(GTK_BOX(hboxUser), GTK_WIDGET(context->ui->username), TRUE, TRUE, 0);
-  gtk_widget_set_tooltip_text(context->ui->username, _("piwigo server account"));
-  gtk_entry_set_width_chars(GTK_ENTRY(context->ui->username), 0);
+  ui->username = gtk_entry_new();
+  gtk_box_pack_start(GTK_BOX(hboxUser), GTK_WIDGET(ui->username), TRUE, TRUE, 0);
+  gtk_widget_set_tooltip_text(ui->username, _("piwigo server account"));
+  gtk_entry_set_width_chars(GTK_ENTRY(ui->username), 0);
   
   // fill username input with config  
   gchar *user = dt_conf_get_string("plugins/imageio/storage/piwigo/username");
   if(user)
   {
-    gtk_entry_set_text(GTK_ENTRY(context->ui->username), user);
+    gtk_entry_set_text(GTK_ENTRY(ui->username), user);
     g_free(user);
   }
     // add callback to write changed config
-  g_signal_connect(context->ui->username, "changed", G_CALLBACK(config_changed_callback), self);
+  g_signal_connect(ui->username, "changed", G_CALLBACK(config_changed_callback), self);
   
   // disable darktable hotkeys, when username field has focus
-  dt_gui_key_accel_block_on_focus_connect(GTK_WIDGET(context->ui->username));
+  dt_gui_key_accel_block_on_focus_connect(GTK_WIDGET(ui->username));
 
     // add password label
-  context->ui->password_label = gtk_label_new(_("Password"));
-  gtk_box_pack_start(GTK_BOX(hboxPass), GTK_WIDGET(context->ui->password_label), TRUE, FALSE, 0);
+  ui->password_label = gtk_label_new(_("Password"));
+  gtk_box_pack_start(GTK_BOX(hboxPass), GTK_WIDGET(ui->password_label), TRUE, FALSE, 0);
   
   // add password input with tooltip
-  context->ui->password = gtk_entry_new();
-  gtk_box_pack_start(GTK_BOX(hboxPass), GTK_WIDGET(context->ui->password), TRUE, TRUE, 0);
-  gtk_entry_set_visibility(GTK_ENTRY(context->ui->password), FALSE);
-  gtk_entry_set_input_purpose(GTK_ENTRY(context->ui->password), GTK_INPUT_PURPOSE_PASSWORD);
-  gtk_widget_set_tooltip_text(context->ui->password, _("piwigo server password"));
-  gtk_entry_set_width_chars(GTK_ENTRY(context->ui->password), 0);
+  ui->password = gtk_entry_new();
+  gtk_box_pack_start(GTK_BOX(hboxPass), GTK_WIDGET(ui->password), TRUE, TRUE, 0);
+  gtk_entry_set_visibility(GTK_ENTRY(ui->password), FALSE);
+  gtk_entry_set_input_purpose(GTK_ENTRY(ui->password), GTK_INPUT_PURPOSE_PASSWORD);
+  gtk_widget_set_tooltip_text(ui->password, _("piwigo server password"));
+  gtk_entry_set_width_chars(GTK_ENTRY(ui->password), 0);
+  
+  // Handle as login button press, on enter key press.
+  g_signal_connect(ui->password, "activate", G_CALLBACK(clicked_login_button), self);
   
   // disable darktable hotkeys, when password field has focus
-  dt_gui_key_accel_block_on_focus_connect(GTK_WIDGET(context->ui->password));
+  dt_gui_key_accel_block_on_focus_connect(GTK_WIDGET(ui->password));
   
   // add login/logout button
-  context->ui->login_button = gtk_button_new_with_label("Login");
-  gtk_box_pack_start(GTK_BOX(vbox), GTK_WIDGET(context->ui->login_button), TRUE, TRUE, 0);
-  g_signal_connect(G_OBJECT(context->ui->login_button), "clicked", G_CALLBACK(clicked_login_button), self);
+  ui->login_button = gtk_button_new_with_label("Login");
+  gtk_box_pack_start(GTK_BOX(vbox), GTK_WIDGET(ui->login_button), TRUE, TRUE, 0);
+  g_signal_connect(G_OBJECT(ui->login_button), "clicked", G_CALLBACK(clicked_login_button), self);
 
   // add album label
-  context->ui->album_label = gtk_label_new(_("Album"));
-  gtk_box_pack_start(GTK_BOX(hboxAlbum), GTK_WIDGET(context->ui->album_label), TRUE, FALSE, 0);
+  ui->album_label = gtk_label_new(_("Album"));
+  gtk_box_pack_start(GTK_BOX(hboxAlbum), GTK_WIDGET(ui->album_label), TRUE, FALSE, 0);
   
   // add album input with extended tooltip
-  context->ui->album = gtk_entry_new();
-  gtk_box_pack_start(GTK_BOX(hboxAlbum), GTK_WIDGET(context->ui->album), TRUE, TRUE, 0);
+  ui->album = gtk_entry_new();
+  gtk_box_pack_start(GTK_BOX(hboxAlbum), GTK_WIDGET(ui->album), TRUE, TRUE, 0);
   
-  dt_gtkentry_setup_completion(GTK_ENTRY(context->ui->album), dt_gtkentry_get_default_path_compl_list());
+  dt_gtkentry_setup_completion(GTK_ENTRY(ui->album), dt_gtkentry_get_default_path_compl_list());
   char *tooltip_text_path = dt_gtkentry_build_completion_tooltip_text(
       _("enter the path where to put exported images\n"
         "recognized variables:"),
       dt_gtkentry_get_default_path_compl_list());
-  gtk_widget_set_tooltip_text(context->ui->album, tooltip_text_path);
+  gtk_widget_set_tooltip_text(ui->album, tooltip_text_path);
   g_free(tooltip_text_path);
-  gtk_entry_set_width_chars(GTK_ENTRY(context->ui->album), 0);
+  gtk_entry_set_width_chars(GTK_ENTRY(ui->album), 0);
   
   // fill album input with config  
   gchar *album = dt_conf_get_string("plugins/imageio/storage/piwigo/album");
   if(album)
   {
-    gtk_entry_set_text(GTK_ENTRY(context->ui->album), album);
+    gtk_entry_set_text(GTK_ENTRY(ui->album), album);
     g_free(album);
   }
   // add callback to write changed config
-  g_signal_connect(context->ui->album, "changed", G_CALLBACK(config_changed_callback), self);
+  g_signal_connect(ui->album, "changed", G_CALLBACK(config_changed_callback), self);
   
   // disable darktable hotkeys, when album field has focus
-  dt_gui_key_accel_block_on_focus_connect(GTK_WIDGET(context->ui->album));
+  dt_gui_key_accel_block_on_focus_connect(GTK_WIDGET(ui->album));
 
+  // <-- END OF WIDGETS
+  
   return;
 }
 
@@ -348,54 +363,102 @@ void gui_init(struct dt_imageio_module_storage_t *self)
 /* destroy resources */
 void gui_cleanup(struct dt_imageio_module_storage_t *self)
 {
-  dt_module_imageio_storage_piwigo_context_t * context = (dt_module_imageio_storage_piwigo_context_t*) self->gui_data;
+  dt_module_imageio_storage_piwigo_ui_t *ui = (dt_module_imageio_storage_piwigo_ui_t*) self->gui_data;
 
-  g_printf("%s:%d - %s() :: Context: %p\n",__FILE__,__LINE__,__func__,context);
-  if ( context )
+  if ( ui )
   {
-    g_printf("%s:%d - %s() :: Context->ui: %p\n",__FILE__,__LINE__,__func__,context->ui);
-    if ( context->ui ) free(context->ui);
-    g_printf("%s:%d - %s() :: Context->auth: %p\n",__FILE__,__LINE__,__func__,context->auth);
-    if ( context->auth)
-    {
-      g_printf("%s:%d - %s() :: Context->auth->username: %p\n",__FILE__,__LINE__,__func__,context->auth->username);
-      if (context->auth->username) free(context->auth->username);
-      g_printf("%s:%d - %s() :: Context->auth->token: %p\n",__FILE__,__LINE__,__func__,context->auth->token);
-      if (context->auth->token) free(context->auth->token);
-      free(context->auth);
+    if ( ui->context ) 
+    { 
+        if ( ui->context->auth)
+        {      
+          if (ui->context->auth->username) 
+          {
+            free(ui->context->auth->username);
+          }
+          if (ui->context->auth->token) 
+          {
+            free(ui->context->auth->token);
+          }
+          free(ui->context->auth);
+        }
+        
+        if (ui->context->parser) 
+        {
+          g_object_unref(ui->context->parser);
+        }
+
+        if (ui->context->supported_file_types) 
+        {
+          free(ui->context->supported_file_types); 
+        }
+      
+        if (ui->context->site) 
+        {
+          free(ui->context->site); 
+        }
+        if (ui->context->path)
+        {
+          free(ui->context->path);
+        }
+
+        if (ui->context->params) 
+        {
+          free(ui->context->params); 
+        }
+        
+        free(ui->context);
     }
-      g_printf("%s:%d - %s() :: Context->parser: %p\n",__FILE__,__LINE__,__func__,context->parser);
-      if (context->parser) g_object_unref(context->parser);
-      g_printf("%s:%d - %s() :: Context->supported_file_types: %p\n",__FILE__,__LINE__,__func__,context->supported_file_types);
-    if (context->supported_file_types) { free(context->supported_file_types); }
-    if (context->site) { free(context->site); }
-    if (context->path) { free(context->path); }
-    if (context->params) { free(context->params); }
-
-    free(context);
+    free(ui);
   }
-
   return;
 }
 /* reset options to defaults */
 void gui_reset(struct dt_imageio_module_storage_t *self)
 {
-  dt_module_imageio_storage_piwigo_context_t *context = self->gui_data;
-  if ( !context || !context->auth )
+  dt_module_imageio_storage_piwigo_ui_t *ui = self->gui_data;
+  dt_module_imageio_storage_piwigo_context_t *context = ( ui ? ui->context : NULL);
+  dt_module_imageio_storage_piwigo_auth_t *auth = ( context ? context->auth : NULL);
+  
+  if ( !ui || !context || !auth )
   {
+    // something's wrong - full reset to initial state!
     gui_cleanup(self);
-    init_context(&context);
+    pwg_init(&ui);
   }
-  else
-  {
-    context->auth->sslPeer = TRUE;
-    context->auth->registered = FALSE;
-    context->auth->username = NULL;
-    context->auth->token = NULL;
-    context->parser = json_parser_new ();
-    context->supported_file_types = NULL;
-  }
+
+  auth->sslPeer = TRUE;
+  auth->registered = FALSE;
+  auth->username = NULL;
+  auth->token = NULL;
+  context->parser = json_parser_new ();
+  context->supported_file_types = NULL;
+
   // TODO - 20181102, codeklöppler: Reset gui elements content
+  context->site = dt_conf_get_string("plugins/imageio/storage/piwigo/site");
+  if(context->site)
+  {
+    gtk_entry_set_text(GTK_ENTRY(ui->site), context->site);
+  }
+  
+  auth->username = dt_conf_get_string("plugins/imageio/storage/piwigo/username");
+  if(auth->username)
+  {
+    gtk_entry_set_text(GTK_ENTRY(ui->username), context->username);
+  }
+  
+  gchar[] password = dt_conf_get_string("plugins/imageio/storage/piwigo/password");
+  if(password)
+  {
+    gtk_entry_set_text(GTK_ENTRY(ui->password), password);
+    free(password);
+  }
+  
+  context->path = dt_conf_get_string("plugins/imageio/storage/piwigo/album");
+  if(context->path)
+  {
+    gtk_entry_set_text(GTK_ENTRY(ui->album), context->path);
+  }
+  
   return;
 }
 
@@ -735,9 +798,52 @@ static gboolean callPWG(dt_module_imageio_storage_piwigo_context_t *context, GSt
 //  return TRUE;
 //}
 
+static void ui_refresh_albums(dt_storage_piwigo_gui_data_t *ui)
+{
+  gboolean success = TRUE;
+  //PICASA: GList *albumList = picasa_get_album_list(ui->picasa_api, &getlistok);
+  if(!success)
+  {
+    dt_control_log(_("unable to refresh the category list"));
+    return;
+  }
+
+  //PICASA: GtkListStore *model_album = GTK_LIST_STORE(gtk_combo_box_get_model(ui->comboBox_album));
+  //PICASA: GtkTreeIter iter;
+  //PICASA: gtk_list_store_clear(model_album);
+  //PICASA: gtk_list_store_append(model_album, &iter);
+  //PICASA: gtk_list_store_set(model_album, &iter, COMBO_ALBUM_MODEL_NAME_COL, _("drop box"),
+  //PICASA:                    COMBO_ALBUM_MODEL_ID_COL, NULL, -1);
+  //PICASA: if(albumList != NULL)
+  //PICASA: {
+  //PICASA:   gtk_list_store_append(model_album, &iter);
+  //PICASA:   gtk_list_store_set(model_album, &iter, COMBO_ALBUM_MODEL_NAME_COL, "", COMBO_ALBUM_MODEL_ID_COL, NULL,
+  //PICASA:                      -1); // separator
+  //PICASA: }
+  //PICASA: g_list_foreach(albumList, (GFunc)ui_refresh_albums_fill, model_album);
+
+  //PICASA: if(albumList != NULL) gtk_combo_box_set_active(ui->comboBox_album, 2);
+  //PICASA: // FIXME: get the albumid and set it in the PicasaCtx
+  //PICASA: else
+  //PICASA: gtk_combo_box_set_active(ui->comboBox_album, 0);
+
+  //PICASA: gtk_widget_show_all(GTK_WIDGET(ui->comboBox_album));
+  //PICASA: g_list_free_full(albumList, (GDestroyNotify)picasa_album_destroy);
+
+  return;
+}
+
+static void _finalize_store(gpointer user_data)
+{
+  dt_storage_piwigo_gui_data_t *ui = (dt_storage_piwigo_gui_data_t *)user_data;
+  ui_refresh_categories(ui);
+  return;
+}
+
 /* called once at the end (after exporting all images), if implemented. */
 void finalize_store(struct dt_imageio_module_storage_t *self, struct dt_imageio_module_data_t *data)
 {
+  g_main_context_invoke(NULL, _finalize_store, self->gui_data);
   return;
 }
 
@@ -755,6 +861,13 @@ size_t params_size(struct dt_imageio_module_storage_t *self)
 
 void *get_params(struct dt_imageio_module_storage_t *self)
 {
+  dt_storage_piwigo_gui_data_t *ui = (dt_storage_piwigo_gui_data_t *)self->gui_data;
+  if(!ui) return NULL; // gui not initialized, CLI mode
+  if(ui->picasa_api == NULL || ui->picasa_api->token == NULL)
+  {
+    return NULL;
+  }
+  
   return (void *) self->gui_data;
 }
 
