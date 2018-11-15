@@ -48,10 +48,13 @@
 
 #define DT_PIWIGO_VERSION 0                 // module version
 #define DT_PIWIGO_NAME    "Piwigo"          // module name
-#define DT_PIWIGO_FAILED  0
-#define DT_PIWIGO_SUCCESS 1
+#define DT_PIWIGO_FAILED  FALSE
+#define DT_PIWIGO_SUCCESS TRUE
 #define DT_PIWIGO_NO      DT_PIWIGO_FAILED
 #define DT_PIWIGO_YES     DT_PIWIGO_SUCCESS
+
+#define DT_PWG_POSTDATA_MAXLEN 8000         // maximum length of POST data string length
+
 // No maximum dimension
 #define DT_PIWIGO_DIMENSION_MAX   0         
 // No recommended dimension
@@ -92,6 +95,26 @@ typedef enum piwigo_methods {
   getCategories
 } piwigo_methods_t;
 
+typedef struct dt_module_imageio_storage_piwigo_auth
+{
+  gchar *username;
+  gboolean registered;
+  gchar *token;
+  gboolean sslPeer;
+} dt_module_imageio_storage_piwigo_auth_t;
+
+
+typedef struct dt_module_imageio_storage_piwigo_context
+{
+  dt_module_imageio_storage_piwigo_auth_t *auth;
+  CURL *curl;
+  char *site;
+  char *path;
+  dt_variables_params_t *params;
+  JsonParser *parser;
+  gchar *supported_file_types;
+} dt_module_imageio_storage_piwigo_context_t;
+
 
 typedef struct dt_module_imageio_storage_piwigo_ui
 {
@@ -104,45 +127,223 @@ typedef struct dt_module_imageio_storage_piwigo_ui
   GtkWidget *password;
   GtkWidget *password_label;
   GtkWidget *login_button;
-  dt_module_imageio_storage_piwigo_context *context;
+  dt_module_imageio_storage_piwigo_context_t *context;
 } dt_module_imageio_storage_piwigo_ui_t;
 
-typedef struct dt_module_imageio_storage_piwigo_auth
-{
-  gchar *username;
-  gboolean registered;
-  gchar *token;
-  gboolean sslPeer;
-} dt_module_imageio_storage_piwigo_auth_t;
-
-typedef struct dt_module_imageio_storage_piwigo_context
-{
-  //dt_module_imageio_storage_piwigo_ui_t *ui;
-  dt_module_imageio_storage_piwigo_auth_t *auth;
-  char *site;
-  char *path;
-  dt_variables_params_t *params;
-  JsonParser *parser;
-  gchar *supported_file_types;
-} dt_module_imageio_storage_piwigo_context_t;
-
-
 // STATIC FUNCTION PROTOTYPES
-static void pwg_init(dt_module_imageio_storage_piwigo_ui_t **ui);
+static void 
+pwg_init(dt_module_imageio_storage_piwigo_ui_t **ui);
+
+static void 
+clicked_login_button(GtkWidget *widget, dt_imageio_module_storage_t *self);
+
+static void 
+config_changed_callback(GtkEntry *entry, gpointer user_data);
+
+static size_t 
+curl_write_data_callback(void *ptr, size_t size, size_t nmemb, void *data);
+
+static JsonObject *
+parse_json_response(dt_module_imageio_storage_piwigo_context_t *context, GString *response);
+
+static gboolean 
+pwg_login(dt_module_imageio_storage_piwigo_ui_t *ui);
+
+static gboolean 
+pwg_logout(dt_module_imageio_storage_piwigo_ui_t *ui);
+
+static gboolean 
+pwg_call(dt_module_imageio_storage_piwigo_ui_t *ui, GString *response, const char* postdata, const char *method);
+
+static void 
+pwg_debug(const char *format, const char *file, size_t line, ...);
+
+static void 
+_finalize_store(gpointer user_data);
+
+//static int pwg_createCategoryPath(dt_module_imageio_storage_piwigo_ui_t *ui, const char * path);
+//static void ui_refresh_albums_fill(PicasaAlbum *album, GtkListStore *list_store);
+
+// STATIC FUNCTIONS IMPLEMENTATION
+/* allow the module to initialize itself */
+static void  pwg_init(dt_module_imageio_storage_piwigo_ui_t **ui)
+{
+  if ( !*ui )
+  {
+    *ui = (dt_module_imageio_storage_piwigo_ui_t *) g_malloc0(sizeof(dt_module_imageio_storage_piwigo_ui_t));
+    (*ui)->context = (dt_module_imageio_storage_piwigo_context_t *) g_malloc0(sizeof(dt_module_imageio_storage_piwigo_context_t));
+    (*ui)->context->auth = (dt_module_imageio_storage_piwigo_auth_t *) g_malloc0(sizeof(dt_module_imageio_storage_piwigo_auth_t));
+  }
+
+  (*ui)->context->auth->sslPeer = TRUE;
+  (*ui)->context->auth->registered = FALSE;
+  (*ui)->context->auth->username = NULL;
+  (*ui)->context->auth->token = NULL;
+  (*ui)->context->site = NULL;
+  (*ui)->context->path = NULL;
+  (*ui)->context->params = NULL;
+  (*ui)->context->parser = json_parser_new();
+  (*ui)->context->supported_file_types = NULL;
+  curl_global_init(CURL_GLOBAL_ALL);
+  return;
+  
+}
+
+static gboolean pwg_login(dt_module_imageio_storage_piwigo_ui_t *ui)
+{
+  GString *response = g_string_new("");
+  gboolean result = FALSE;
+  char *postbuffer = g_malloc0(DT_PWG_POSTDATA_MAXLEN);
+  
+  /* specify the POST data */
+  snprintf(postbuffer, DT_PWG_POSTDATA_MAXLEN, "username=%s&password=%s", gtk_entry_get_text(GTK_ENTRY(ui->username)), gtk_entry_get_text(GTK_ENTRY(ui->password)));
+ 
+  if ( pwg_call(ui, response, postbuffer, DT_PIWIGO_API_SESSION_LOGIN) )
+  {
+    // api call succeeded, now parse response
+#   ifdef DT_PIWIGO_DEBUG
+    g_printf("Response of JSON-Parser:\n%s\n---\n", response->str);
+#   endif
+    JsonObject *rootObject = parse_json_response(ui->context, response);
+    if ( rootObject ) {
+      if ( 0 == strcmp("ok", json_object_get_string_member(rootObject, "stat") ) ) {
+        result = json_object_get_boolean_member(rootObject, "result");
+        // clear password field
+        gtk_entry_set_text(GTK_ENTRY(ui->password), "");
+      }
+    }
+  }
+
+  // free temporary buffers as soon as possible
+  free(postbuffer);
+  g_string_free(response, TRUE);
+
+#ifdef DT_PIWIGO_DEBUG
+    g_printf("Result of pwg_login(): %s\n",  result ? "true" : "false");
+#endif
+  return result;
+}
 
 
-static void clicked_login_button(GtkWidget *widget, dt_imageio_module_storage_t *self);
-static void config_changed_callback(GtkEntry *entry, gpointer user_data);
-static size_t curl_write_data_callback(void *ptr, size_t size, size_t nmemb, void *data);
-static JsonObject *parse_json_response(dt_module_imageio_storage_piwigo_context_t *context, GString *response);
-static gboolean pwg_login(dt_module_imageio_storage_piwigo_context_t *context);
-static gboolean pwg_logout(dt_module_imageio_storage_piwigo_context_t *context);
-//static gboolean callREST(GString *response, dt_module_imageio_storage_piwigo_context_t *context, GString *method);
-static gboolean callPWG(dt_module_imageio_storage_piwigo_context_t *context, GString *response, const char* postdata, const char *method);
-static int pwg_createCategoryPath(dt_module_imageio_storage_piwigo_contextpiwigo_context_t *context, const char * path);
-static void pwg_debug(const char *format, const char *file, size_t line, ...);
-static void _finalize_store(gpointer user_data);
-static void ui_refresh_albums_fill(PicasaAlbum *album, GtkListStore *list_store);
+static gboolean pwg_logout(dt_module_imageio_storage_piwigo_ui_t *ui)
+{
+
+  GString *response = g_string_new("");
+  gboolean result = FALSE;
+
+  result = pwg_call(context, response, NULL, DT_PIWIGO_API_SESSION_LOGOUT);
+    if ( result )
+  {
+    // api call succeeded, now parse response
+#ifdef DT_PIWIGO_DEBUG    
+    g_printf("Calling Json Parser:\n%s\n---\n", response->str);
+#endif
+      JsonObject *rootObject = parse_json_response(context, response);
+      if ( 0 == strcmp("ok", json_object_get_string_member(rootObject, "stat") ) ) {
+        result = json_object_get_boolean_member(rootObject, "result");
+      }
+  }
+  
+  g_string_free(response, TRUE);
+  return result;
+}
+
+
+/*
+ * // Login
+ * bool success = pwg_call(context, response, "username=sven&password=XpassYwordZ", "https://www.consensionis.de/Fotoprojekte", DT_PIWIGO_API_SESSION_LOGIN);
+ *
+ * // Logout
+ * bool success = pwg_call(context, response, "", "https://www.consensionis.de/Fotoprojekte", DT_PIWIGO_API_SESSION_LOGOUT);
+ *
+ * // Get Category List
+ * bool success = pwg_call(context, response, "", "https://www.consensionis.de/Fotoprojekte", DT_PIWIGO_API_CATEGORY_GETLIST "&recursive=true&tree_output=true");
+ *
+ * // Get Category List
+ * bool success = pwg_call(context, response, "", "https://www.consensionis.de/Fotoprojekte", DT_PIWIGO_API_CATEGORY_ADD "&name=Übungen&parent=0");
+ *
+ * // Upload Photo
+ * bool success = pwg_call(context, response, "category=2&name=The Lion King&author=Sven Fröhlich&comment=Der erste Versuch des Foto-Uploads&level=0&tags=Tiere&tags=Tierpark", "https://www.consensionis.de/Fotoprojekte", DT_PIWIGO_API_IMAGES_ADD_SIMPLE);
+ *
+ * // Status
+ * bool success = pwg_call(context, response, "", "https://www.consensionis.de/Fotoprojekte", DT_PIWIGO_API_SESSION_GET_STATUS);
+ *
+ */
+static gboolean pwg_call(dt_module_imageio_storage_piwigo_ui_t *ui, GString *response, const char* postdata, const char *method)
+{
+  CURLcode res;
+  char curl_errbuf[CURL_ERROR_SIZE] = "";
+  gboolean result = DT_PIWIGO_FAILED;
+
+  // plausibility check
+  if ( !ui || !ui->context || !response || !method)
+  {
+    return result;
+  }
+
+  if ( !ui->context->curl )
+  {
+    ui->context->curl = curl_easy_init();
+  }
+
+  if (ui->context->curl)
+  {
+    /* First set the URL that is about to receive our POST. This URL can
+       just as well be a https:// URL if that is what should receive the
+       data. */
+    char *callBuffer = malloc(PATH_MAX);
+    memset(callBuffer, 0, PATH_MAX);
+    // TODO - Check for correct length and url injection!!!
+    snprintf(callBuffer, PATH_MAX, "%s/%s", ui->context->site, method);
+    curl_easy_setopt(ui->context->curl, CURLOPT_URL, callBuffer);
+
+    curl_easy_setopt(ui->context->curl, CURLOPT_ERRORBUFFER, curl_errbuf);
+
+#ifdef DT_PIWIGO_DEBUG
+    curl_easy_setopt(ui->context->curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(ui->context->curl, CURLOPT_VERBOSE, 2L);
+#else
+    curl_easy_setopt(ui->context->curl, CURLOPT_NOPROGRESS, 1L);
+    curl_easy_setopt(ui->context->curl, CURLOPT_VERBOSE, 0L);
+#endif
+
+    if (!ui->context->auth->sslPeer) {
+      curl_easy_setopt(ui->context->curl, CURLOPT_SSL_VERIFYPEER, FALSE);
+    }
+
+    /* Now specify the POST data */ 
+    if ( postdata && strlen(postdata) > 0 ) {
+      // TODO - Check postdata for code injection
+      curl_easy_setopt(ui->context->curl, CURLOPT_POSTFIELDS, postdata);
+    }
+    
+    /* specify function call for writing response */
+    curl_easy_setopt(ui->context->curl, CURLOPT_WRITEFUNCTION, curl_write_data_callback);
+
+    // Set the response buffer
+    curl_easy_setopt(ui->context->curl, CURLOPT_WRITEDATA, response);
+ 
+    /* Perform the request, res will get the return code */ 
+    res = curl_easy_perform(ui->context->curl);
+    /* Check for errors */ 
+    if(res == CURLE_OK)
+    {
+      result = TRUE;
+    }
+    else
+    {
+      fprintf(stderr, "curl_easy_perform() failed: %s\n",
+              curl_easy_strerror(res));
+
+    }
+    // Clean up all buffers
+    free(callBuffer);
+  }
+  return result;
+}
+
+
+/* DARKTABLE MODULE API FUNCTIONS */
 
 // defined in imagio_storage_api.h
 int version()
@@ -163,31 +364,6 @@ void init(dt_imageio_module_storage_t *self)
   dt_control_log(_("call pwg_init() inside init()"));
   pwg_init(&ui);
 }
-
-/* allow the module to initialize itself */
-void  pwg_init(dt_module_imageio_storage_piwigo_ui_t **ui)
-{
-  if ( !*ui )
-  {
-    *ui = (dt_module_imageio_storage_piwigo_ui_t *) g_malloc0(sizeof(dt_module_imageio_storage_piwigo_ui_t));
-    (*ui)->context = (dt_module_imageio_storage_piwigo_context_t *) g_malloc0(sizeof(dt_module_imageio_storage_piwigo_context_t));
-    (*ui)->context->auth = (dt_module_imageio_storage_piwigo_auth_t *) g_malloc0(sizeof(dt_module_imageio_storage_piwigo_auth_t));
-  }
-
-  (*ui)->context->auth->sslPeer = TRUE;
-  (*ui)->context->auth->registered = FALSE;
-  (*ui)->context->auth->username = NULL;
-  (*ui)->context->auth->token = NULL;
-  (*ui)->context->site = NULL;
-  (*ui)->context->path = NULL;
-  (*ui)->context->params = NULL;
-  (*ui)->context->parser = json_parser_new();
-  (*ui)->context->supported_file_types = NULL;
-  
-  return;
-  
-}
-
 /* construct module widget */
 void gui_init(struct dt_imageio_module_storage_t *self)
 {
@@ -374,41 +550,57 @@ void gui_cleanup(struct dt_imageio_module_storage_t *self)
           if (ui->context->auth->username) 
           {
             free(ui->context->auth->username);
+            ui->context->auth->username = NULL;
           }
           if (ui->context->auth->token) 
           {
             free(ui->context->auth->token);
+            ui->context->auth->token = NULL;
           }
           free(ui->context->auth);
+          ui->context->auth = NULL;
         }
         
         if (ui->context->parser) 
         {
           g_object_unref(ui->context->parser);
+          ui->context->parser = NULL;
         }
 
         if (ui->context->supported_file_types) 
         {
-          free(ui->context->supported_file_types); 
+          free(ui->context->supported_file_types);
+          ui->context->supported_file_types = NULL;
         }
-      
+        if ( ui->context->curl )
+        {
+          /* always cleanup */
+          curl_easy_cleanup(ui->context->curl);
+          curl_global_cleanup();
+          ui->context->curl = NULL;
+        }
         if (ui->context->site) 
         {
-          free(ui->context->site); 
+          free(ui->context->site);
+          ui->context->site = NULL;
         }
         if (ui->context->path)
         {
           free(ui->context->path);
+          ui->context->path = NULL;
         }
 
         if (ui->context->params) 
         {
-          free(ui->context->params); 
+          free(ui->context->params);
+          ui->context->params = NULL;
         }
         
         free(ui->context);
+        ui->context = NULL;
     }
     free(ui);
+    ui = NULL;
   }
   return;
 }
@@ -423,6 +615,7 @@ void gui_reset(struct dt_imageio_module_storage_t *self)
   {
     // something's wrong - full reset to initial state!
     gui_cleanup(self);
+    dt_control_log(_("call pwg_init() inside gui_reset()"));
     pwg_init(&ui);
   }
 
@@ -443,10 +636,10 @@ void gui_reset(struct dt_imageio_module_storage_t *self)
   auth->username = dt_conf_get_string("plugins/imageio/storage/piwigo/username");
   if(auth->username)
   {
-    gtk_entry_set_text(GTK_ENTRY(ui->username), context->username);
+    gtk_entry_set_text(GTK_ENTRY(ui->username), auth->username);
   }
   
-  gchar[] password = dt_conf_get_string("plugins/imageio/storage/piwigo/password");
+  gchar * password = dt_conf_get_string("plugins/imageio/storage/piwigo/password");
   if(password)
   {
     gtk_entry_set_text(GTK_ENTRY(ui->password), password);
@@ -465,13 +658,20 @@ void gui_reset(struct dt_imageio_module_storage_t *self)
 /* try and see if this format is supported? */
 int supported(struct dt_imageio_module_storage_t *self, struct dt_imageio_module_format_t *format)
 {
+  dt_module_imageio_storage_piwigo_ui_t *ui = self->gui_data;
   int result = DT_PIWIGO_NO;
 
-  if ( ( strcmp(format->mime(NULL) ,"image/jpeg") == 0 )
-       || ( strcmp(format->mime(NULL) ,"image/png") ==  0 ) 
-       || ( strcmp(format->mime(NULL) ,"image/gif") ==  0 ) )
+  if ( ui->context->supported_file_types )
   {
-    result = DT_PIWIGO_YES;
+    // "jpg,jpeg,png,gif" from pwg.session.getStatus => $.result.upload_file_types
+    // TODO - change to parsing of supported_fie_types
+
+    if ( ( strcmp(format->mime(NULL) ,"image/jpeg") == 0 )
+         || ( strcmp(format->mime(NULL) ,"image/png") ==  0 )
+         || ( strcmp(format->mime(NULL) ,"image/gif") ==  0 ) )
+    {
+      result = DT_PIWIGO_YES;
+    }
   }
 
   return result;
@@ -499,7 +699,7 @@ int initialize_store(struct dt_imageio_module_storage_t *self, struct dt_imageio
                      GList **images, const gboolean high_quality, const gboolean upscale)
 {
   // TODO 20181102, codeklöppler: Create album path, if it does'nt exist
-  dt_module_imageio_storage_piwigo_context_t * context = (dt_module_imageio_storage_piwigo_context_t*) self->gui_data;
+  dt_module_imageio_storage_piwigo_ui_t *ui = (dt_module_imageio_storage_piwigo_ui_t*) self->gui_data;
   //gchar *fullAlbumPath = NULL;
   //gchar *currentAlbum = NULL;
   //unsigned int parentCategory = 0;
@@ -515,12 +715,12 @@ int initialize_store(struct dt_imageio_module_storage_t *self, struct dt_imageio
 //      d->vp->imgid = imgid;
 //      d->vp->sequence = num;
 //
-  printf("UI Path: '%s'\n", gtk_entry_get_text(GTK_ENTRY(context->ui->album)));
+  printf("UI Path: '%s'\n", gtk_entry_get_text(GTK_ENTRY(ui->album)));
   //pwg_debug("UI Path: '%s'\n", __FILE__,__LINE__,gtk_entry_get_text(GTK_ENTRY(context->ui->album)));
   //categoryId = pwg_createCategoryPath(context, dt_variables_expand( context->params, (char *) gtk_entry_get_text(GTK_ENTRY(context->ui->album)), TRUE));
-  categoryId = pwg_createCategoryPath(context, "Exkurse/Hodenhagen");
+  categoryId = 0; //pwg_createCategoryPath(ui, "Exkurse/Hodenhagen");
   if ( categoryId >= 0 ) {
-	  result = DT_PIWIGO_SUCCESS;
+    result = DT_PIWIGO_SUCCESS;
   }
   
   /*
@@ -548,8 +748,10 @@ int store(struct dt_imageio_module_storage_t *self, struct dt_imageio_module_dat
           enum dt_colorspaces_color_profile_type_t icc_type, const gchar *icc_filename,
           enum dt_iop_color_intent_t icc_intent)
 {
-  dt_module_imageio_storage_piwigo_context_t *context = (dt_module_imageio_storage_piwigo_context_t *) self->gui_data;
-  CURL *curl;
+  dt_module_imageio_storage_piwigo_ui_t *ui = (dt_module_imageio_storage_piwigo_ui_t *) self->gui_data;
+  dt_module_imageio_storage_piwigo_context_t *context = ui->context;
+
+
   char curl_errbuf[CURL_ERROR_SIZE];
   CURLcode res;
   GString *response = g_string_new("");
@@ -561,36 +763,42 @@ int store(struct dt_imageio_module_storage_t *self, struct dt_imageio_module_dat
   }
 
   // Try to login
-  curl = curl_easy_init();
-  if (curl) {
+  if ( ! context->curl )
+  {
+    context->curl = curl_easy_init();
+  }
+
+  if (context->curl)
+  {
+      curl_easy_reset(context->curl);
 
     /* First set the URL that is about to receive our POST. This URL can
        just as well be a https:// URL if that is what should receive the
        data. */
 
-    curl_easy_setopt(curl, CURLOPT_URL, "https://www.consensionis.de/Album" DT_PIWIGO_API "pwg.session.getStatus");
+    curl_easy_setopt(context->curl, CURLOPT_URL, "https://www.consensionis.de/Album" DT_PIWIGO_API "pwg.session.getStatus");
     
-    curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, curl_errbuf);
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(context->curl, CURLOPT_ERRORBUFFER, curl_errbuf);
+    curl_easy_setopt(context->curl, CURLOPT_NOPROGRESS, 0L);
 #ifdef picasa_EXTRA_VERBOSE
-    curl_easy_setopt(curl, CURLOPT_VERBOSE, 2L);
+    curl_easy_setopt(context->curl, CURLOPT_VERBOSE, 2L);
 #else
-    curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+    curl_easy_setopt(context->curl, CURLOPT_VERBOSE, 1L);
 #endif
 
     if ( !context->auth->sslPeer )
     {
-      curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, FALSE);
+      curl_easy_setopt(context->curl, CURLOPT_SSL_VERIFYPEER, FALSE);
     }
 
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_data_callback);
+    curl_easy_setopt(context->curl, CURLOPT_WRITEFUNCTION, curl_write_data_callback);
     /* Now specify the POST data */ 
     //curl_easy_setopt(curl, CURLOPT_POSTFIELDS, "name=daniel&project=curl");
  
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, response);
+    curl_easy_setopt(context->curl, CURLOPT_WRITEDATA, response);
  
     /* Perform the request, res will get the return code */ 
-    res = curl_easy_perform(curl);
+    res = curl_easy_perform(context->curl);
     /* Check for errors */ 
     if(res == CURLE_OK)
     {
@@ -609,107 +817,13 @@ int store(struct dt_imageio_module_storage_t *self, struct dt_imageio_module_dat
               curl_easy_strerror(res));
     }
     g_string_free(response, TRUE);
-    /* always cleanup */ 
-    curl_easy_cleanup(curl);
   }
-  curl_global_cleanup();
 
   return result;
 }
 
 
-/*
- * // Login
- * bool success = callPWG(context, response, "username=sven&password=XpassYwordZ", "https://www.consensionis.de/Fotoprojekte", DT_PIWIGO_API_SESSION_LOGIN);
- *
- * // Logout
- * bool success = callPWG(context, response, "", "https://www.consensionis.de/Fotoprojekte", DT_PIWIGO_API_SESSION_LOGOUT);
- *
- * // Get Category List
- * bool success = callPWG(context, response, "", "https://www.consensionis.de/Fotoprojekte", DT_PIWIGO_API_CATEGORY_GETLIST "&recursive=true&tree_output=true");
- *
- * // Get Category List
- * bool success = callPWG(context, response, "", "https://www.consensionis.de/Fotoprojekte", DT_PIWIGO_API_CATEGORY_ADD "&name=Übungen&parent=0");
- *
- * // Upload Photo
- * bool success = callPWG(context, response, "category=2&name=The Lion King&author=Sven Fröhlich&comment=Der erste Versuch des Foto-Uploads&level=0&tags=Tiere&tags=Tierpark", "https://www.consensionis.de/Fotoprojekte", DT_PIWIGO_API_IMAGES_ADD_SIMPLE);
- *
- * // Status
- * bool success = callPWG(context, response, "", "https://www.consensionis.de/Fotoprojekte", DT_PIWIGO_API_SESSION_GET_STATUS);
- *
- */
-static gboolean callPWG(dt_module_imageio_storage_piwigo_context_t *context, GString *response, const char* postdata, const char *method)
-{
-  CURL *curl = NULL;
-  CURLcode res;
-  char curl_errbuf[CURL_ERROR_SIZE] = "";
-  gboolean result = FALSE;
 
-  if ( !context || !response )
-  {
-    // shortcut exit
-    return result;
-  }
-  
-  curl_global_init(CURL_GLOBAL_ALL);
-  curl = curl_easy_init();
-  if ( curl )
-  {
-    /* First set the URL that is about to receive our POST. This URL can
-       just as well be a https:// URL if that is what should receive the
-       data. */
-    char *callBuffer = malloc(PATH_MAX);
-    memset(callBuffer, 0, PATH_MAX);
-    // TODO - Check for correct length and url injection!!!
-    snprintf(callBuffer, PATH_MAX, "%s/%s", context->site, method);
-    curl_easy_setopt(curl, CURLOPT_URL, callBuffer);
-
-    curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, curl_errbuf);
-
-#ifdef DT_PIWIGO_DEBUG
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-    curl_easy_setopt(curl, CURLOPT_VERBOSE, 2L);
-#else
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
-    curl_easy_setopt(curl, CURLOPT_VERBOSE, 0L);
-#endif
-
-    if (!context->auth->sslPeer) {
-      curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, FALSE);
-    }
-
-    /* Now specify the POST data */ 
-    if ( postdata && strlen(postdata) > 0 ) {
-      // TODO - Check postdata for code injection
-      curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postdata);
-    }
-    
-    /* specify function call for writing response */
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_data_callback);
-
-    // Set the response buffer
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, response);
- 
-    /* Perform the request, res will get the return code */ 
-    res = curl_easy_perform(curl);
-    /* Check for errors */ 
-    if(res == CURLE_OK)
-    {
-      result = TRUE;
-    }
-    else
-    {
-      fprintf(stderr, "curl_easy_perform() failed: %s\n",
-              curl_easy_strerror(res));
-
-    }
-    // Clean up all buffers
-    free(callBuffer);
-    curl_easy_cleanup(curl);
-  }
-  curl_global_cleanup();
-  return result;
-}
 
 
 //
@@ -798,15 +912,15 @@ static gboolean callPWG(dt_module_imageio_storage_piwigo_context_t *context, GSt
 //  return TRUE;
 //}
 
-static void ui_refresh_albums(dt_storage_piwigo_gui_data_t *ui)
-{
-  gboolean success = TRUE;
+//static void ui_refresh_albums(dt_storage_piwigo_gui_data_t *ui)
+//{
+//  gboolean success = TRUE;
   //PICASA: GList *albumList = picasa_get_album_list(ui->picasa_api, &getlistok);
-  if(!success)
-  {
-    dt_control_log(_("unable to refresh the category list"));
-    return;
-  }
+//  if(!success)
+//  {
+//    dt_control_log(_("unable to refresh the category list"));
+//    return;
+//  }
 
   //PICASA: GtkListStore *model_album = GTK_LIST_STORE(gtk_combo_box_get_model(ui->comboBox_album));
   //PICASA: GtkTreeIter iter;
@@ -830,12 +944,12 @@ static void ui_refresh_albums(dt_storage_piwigo_gui_data_t *ui)
   //PICASA: gtk_widget_show_all(GTK_WIDGET(ui->comboBox_album));
   //PICASA: g_list_free_full(albumList, (GDestroyNotify)picasa_album_destroy);
 
-  return;
-}
+//  return;
+//}
 
 static void _finalize_store(gpointer user_data)
 {
-  dt_storage_piwigo_gui_data_t *ui = (dt_storage_piwigo_gui_data_t *)user_data;
+  dt_module_imageio_storage_piwigo_ui_t *ui = (dt_module_imageio_storage_piwigo_ui_t *)user_data;
   ui_refresh_categories(ui);
   return;
 }
@@ -861,9 +975,9 @@ size_t params_size(struct dt_imageio_module_storage_t *self)
 
 void *get_params(struct dt_imageio_module_storage_t *self)
 {
-  dt_storage_piwigo_gui_data_t *ui = (dt_storage_piwigo_gui_data_t *)self->gui_data;
+  dt_module_imageio_storage_piwigo_ui_t *ui = (dt_module_imageio_storage_piwigo_ui_t *) self->gui_data;
   if(!ui) return NULL; // gui not initialized, CLI mode
-  if(ui->picasa_api == NULL || ui->picasa_api->token == NULL)
+  if(ui->context == NULL || ui->context->auth->token == NULL)
   {
     return NULL;
   }
@@ -890,131 +1004,62 @@ void export_dispatched(struct dt_imageio_module_storage_t *self)
 
 static void clicked_login_button(GtkWidget *widget, dt_imageio_module_storage_t *self)
 {
-  dt_module_imageio_storage_piwigo_context_t *context = (dt_module_imageio_storage_piwigo_context_t *) self->gui_data;
+  dt_module_imageio_storage_piwigo_ui_t *ui = (dt_module_imageio_storage_piwigo_ui_t *) self->gui_data;
 
   GdkCursor * cursor = gdk_cursor_new_from_name(gdk_display_manager_get_default_display(gdk_display_manager_get()),"wait");
-  GdkWindow * window = gtk_widget_get_parent_window (context->ui->login_button);
+  GdkWindow * window = gtk_widget_get_parent_window (ui->login_button);
   gdk_window_set_cursor (window, cursor);
-  //const gchar *last = gtk_button_get_label(GTK_BUTTON(context->ui->login_button));
-  gtk_button_set_label(GTK_BUTTON(context->ui->login_button), _("Wait..."));
+  gtk_button_set_label(GTK_BUTTON(ui->login_button), _("Wait..."));
 
-  while ( g_main_context_pending(NULL) ) {
+  do {
     // refresh button label, before continue
-    g_main_context_iteration(NULL,FALSE);
-  }
+    g_main_context_iteration(NULL,TRUE);
+  } while ( g_main_context_pending(NULL) );
 
-  if (!context->auth->registered) {  // logging in
-    if (context->site) {
-      free(context->site);
-      context->site = NULL;
+  if (!ui->context->auth->registered) {  // logging in
+    if (ui->context->site) {
+      free(ui->context->site);
+      ui->context->site = NULL;
     }
-    context->site = strdup(
-        gtk_entry_get_text(GTK_ENTRY(context->ui->site)));
-    context->auth->registered = pwg_login(context);
+    ui->context->site = strdup(
+        gtk_entry_get_text(GTK_ENTRY(ui->site)));
+    ui->context->auth->registered = pwg_login(ui->context);
   }
   else  {// logging out
-    context->auth->registered = !pwg_logout(context); // unregister on logout success
+    ui->context->auth->registered = !pwg_logout(ui->context); // unregister on logout success
   }
 
   // Login status change now
-  if (context->auth->registered) {
-    gtk_button_set_label(GTK_BUTTON(context->ui->login_button),
-        _("Logout"));
+  if (ui->context->auth->registered) {
+    gtk_button_set_label(GTK_BUTTON(ui->login_button), _("Logout"));
   } else {
-
-    if (context->site) {
-      free(context->site);
-      context->site = NULL;
+    gtk_button_set_label(GTK_BUTTON(ui->login_button), _("Login"));
+    if (ui->context->site) {
+      free(ui->context->site);
+      ui->context->site = NULL;
     }
-    gtk_button_set_label(GTK_BUTTON(context->ui->login_button), _("Login"));
   }
   // enable or disable login information widgets
-  gtk_widget_set_sensitive (context->ui->site, !(context->auth->registered));
-  gtk_widget_set_sensitive (context->ui->username, !(context->auth->registered));
-  gtk_widget_set_sensitive (context->ui->password, !(context->auth->registered));
+  gtk_widget_set_sensitive (ui->site, !(ui->context->auth->registered));
+  gtk_widget_set_sensitive (ui->username, !(ui->context->auth->registered));
+  gtk_widget_set_sensitive (ui->password, !(ui->context->auth->registered));
   gdk_window_set_cursor (window, NULL);
   
 }
 
-// static gboolean callREST(GString *response, dt_module_imageio_storage_piwigo_context_t *context, GString *method) 
-// {
-  // gboolean result = FALSE;
-  // CURL *curl = NULL;
-  // CURLcode res = 0;
-  // char curl_errbuf[CURL_ERROR_SIZE];
-  
-  // curl = curl_easy_init();
-  // if ( curl )
-  // {
-    // // Check if we are successful logged in
-    // if ( context->auth->registered || pwg_login(context) )
-    // {
-      // char *callBuffer = malloc(PATH_MAX);
-      // memset(callBuffer, 0, PATH_MAX);
-    
-      // // TODO - Check for correct length and url injection!!!
-      // snprintf(callBuffer, PATH_MAX, "%s/%s", gtk_entry_get_text(GTK_ENTRY(context->ui->site)), method->str);
-    
-      // curl_easy_setopt(curl, CURLOPT_URL, callBuffer);
-      // curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, curl_errbuf);
-// #ifdef picasa_EXTRA_VERBOSE
-      // curl_easy_setopt(curl, CURLOPT_VERBOSE, 2L);
-      // curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-// #else
-      // curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
-      // curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
-// #endif
-
-      // if ( !context->auth->sslPeer )
-      // {
-        // curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, FALSE);
-      // }
-
-      // /* We don't do POST data */ 
-      // curl_easy_setopt(curl, CURLOPT_POSTFIELDS, "");
- 
-      // // Set the response data function and buffer  
-      // curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_data_callback);
-      // curl_easy_setopt(curl, CURLOPT_WRITEDATA, response);
- 
-      // /* Perform the request, res will get the return code */ 
-      // res = curl_easy_perform(curl);
-    
-      // // free temporary buffers as soon as possible
-      // free(callBuffer);
-        
-      // /* Check for errors */ 
-      // if(res == CURLE_OK)
-      // {
-        // result = TRUE;
-      // }
-      // else
-      // {
-        // fprintf(stderr, "curl_easy_perform() failed: [%d] %s\n", res, curl_easy_strerror(res));
-      // }
-
-      // /* always cleanup */ 
-      // curl_easy_cleanup(curl);
-    // }
-    // curl_global_cleanup();
-  // }
-  // return result;
-// }
-
-
 static void pwg_debug(const char *format, const char *file, size_t line, ...) {
 #ifdef DT_PIWIGO_DEBUG
-	char full_format[2048];
-	va_list arglist;
-	va_start( arglist, line );
-	snprintf(full_format, 2048, "DEBUG[%s:%lu]: %s\n", file, line, format);
-	printf("\nFORMAT: %s", full_format);
+  char full_format[2048];
+  va_list arglist;
+  va_start( arglist, line );
+  snprintf(full_format, 2048, "DEBUG[%s:%lu]: %s\n", file, line, format);
+  printf("\nFORMAT: %s", full_format);
 
-	printf(  "DATA  : %s\n", va_arg(arglist, char*));
+  printf(  "DATA  : %s\n", va_arg(arglist, char*));
     printf(full_format, arglist);
     va_end( arglist );
 #endif
-	return;
+  return;
 }
 
 /*
@@ -1024,102 +1069,102 @@ static void pwg_debug(const char *format, const char *file, size_t line, ...) {
  * "[/]rootCategory/subCategory_1/Category\/with\/slashes/leafCategory"
  * leading slash is optional
  */
-static int pwg_createCategoryPath(dt_module_imageio_storage_piwigo_context_t *context, const char * path) {
-  int id = -1;
-  GString *response = g_string_new("");
-  GString *targetsArray[255];
-  size_t targetsPosition = 0;
-  GString *target = g_string_new("");
-  gchar * escapedPath = g_strescape(path, NULL);
-  size_t pathPosition = 0;
+// static int pwg_createCategoryPath(dt_module_imageio_storage_piwigo_ui_t *ui, const char * path) {
+  // int id = -1;
+  // GString *response = g_string_new("");
+  // GString *targetsArray[255];
+  // size_t targetsPosition = 0;
+  // GString *target = g_string_new("");
+  // gchar * escapedPath = g_strescape(path, NULL);
+  // size_t pathPosition = 0;
 
-  printf("Path: '%s'\n", path);
-  printf("[DEBUG - %s:%d] Initial target category      : '%s'\n", __FILE__, __LINE__, path);
-  printf("[DEBUG - %s:%d] Searching for target category: '%s'\n", __FILE__, __LINE__, escapedPath);
+  // printf("Path: '%s'\n", path);
+  // printf("[DEBUG - %s:%d] Initial target category      : '%s'\n", __FILE__, __LINE__, path);
+  // printf("[DEBUG - %s:%d] Searching for target category: '%s'\n", __FILE__, __LINE__, escapedPath);
 
-  size_t targetStart = pathPosition;
-  while ( pathPosition < strlen(escapedPath) ) {
-	  printf(".");
-    if ( '/' == escapedPath[pathPosition] ) {
-      if (pathPosition > targetStart) {
-        // add target to array
-    	  printf("Target found: '%s'\n", target->str);
-        targetsArray[targetsPosition] = g_string_new(target->str);
-        printf("targetsArray[%lu] == %s\n", targetsPosition,(targetsArray[targetsPosition])->str);
-        targetsPosition++;
-        g_string_truncate(target,0);
-      }
-    } 
-    else {
-      if ( '\\' == escapedPath[pathPosition] ) {
-        // jump over escaped characters
-        pathPosition++;
-      }
-      // append char to target category
-      target = g_string_append_c (target, escapedPath[pathPosition]);
-      printf("Target: '%s'\n", target->str);
-    }
-    pathPosition++;
-  }
-  printf("\n");
-  // targets Array should be filled - Now look what we already have and what needs to be created
+  // size_t targetStart = pathPosition;
+  // while ( pathPosition < strlen(escapedPath) ) {
+    // printf(".");
+    // if ( '/' == escapedPath[pathPosition] ) {
+      // if (pathPosition > targetStart) {
+        // // add target to array
+        // printf("Target found: '%s'\n", target->str);
+        // targetsArray[targetsPosition] = g_string_new(target->str);
+        // printf("targetsArray[%lu] == %s\n", targetsPosition,(targetsArray[targetsPosition])->str);
+        // targetsPosition++;
+        // g_string_truncate(target,0);
+      // }
+    // } 
+    // else {
+      // if ( '\\' == escapedPath[pathPosition] ) {
+        // // jump over escaped characters
+        // pathPosition++;
+      // }
+      // // append char to target category
+      // target = g_string_append_c (target, escapedPath[pathPosition]);
+      // printf("Target: '%s'\n", target->str);
+    // }
+    // pathPosition++;
+  // }
+  // printf("\n");
+  // // targets Array should be filled - Now look what we already have and what needs to be created
   
-  if ( callPWG(context, response, NULL, DT_PIWIGO_API_CATEGORY_GET_ADMINLIST) ) {
-    pwg_debug("Calling Json Parser:\n%s\n---\n", __FILE__, __LINE__, response->str);
+  // if ( pwg_call(ui, response, NULL, DT_PIWIGO_API_CATEGORY_GET_ADMINLIST) ) {
+    // pwg_debug("Calling Json Parser:\n%s\n---\n", __FILE__, __LINE__, response->str);
 
-    JsonObject *rootObject = parse_json_response(context, response);
-    //JsonNode *rootNode = json_parser_get_root(context->parser);
+    // JsonObject *rootObject = parse_json_response(context, response);
+    // //JsonNode *rootNode = json_parser_get_root(context->parser);
     
-    if ( rootObject ) {
-      //size_t catId = 0;
+    // if ( rootObject ) {
+      // //size_t catId = 0;
 
-      for ( int i = 0; i < targetsPosition; i++ ) {
-        //char expression[2048];
-        //int count = 0;
+      // for ( int i = 0; i < targetsPosition; i++ ) {
+        // //char expression[2048];
+        // //int count = 0;
         
-        printf("DEBUG: [Line %d] Target-%d : '%s'\n", __LINE__, i, (targetsArray[i])->str);
+        // printf("DEBUG: [Line %d] Target-%d : '%s'\n", __LINE__, i, (targetsArray[i])->str);
         
-        /* JSON path query
-        $.result.categories[?(@ && /Exkursionen/.test(@.name) )].id
-        => [ "7" ]
+        // /* JSON path query
+        // $.result.categories[?(@ && /Exkursionen/.test(@.name) )].id
+        // => [ "7" ]
         
-        $.result.categories[?(@ && /Norwegen/.test(@.name) && /\b7\b/.test(@.uppercats) )]
-        => 
-        [
-            {
-                "id": "9",
-                "name": "Norwegen",
-                "comment": "",
-                "uppercats": "7,9",
-                "global_rank": "1.1",
-                "dir": null,
-                "status": "private",
-                "nb_images": "1",
-                "fullname": "Exkursionen / Norwegen"
-            }
-        ]
-        */
+        // $.result.categories[?(@ && /Norwegen/.test(@.name) && /\b7\b/.test(@.uppercats) )]
+        // => 
+        // [
+            // {
+                // "id": "9",
+                // "name": "Norwegen",
+                // "comment": "",
+                // "uppercats": "7,9",
+                // "global_rank": "1.1",
+                // "dir": null,
+                // "status": "private",
+                // "nb_images": "1",
+                // "fullname": "Exkursionen / Norwegen"
+            // }
+        // ]
+        // */
         
-        //pwg_debug("Target-%02d : '%s'\n", __FILE__, __LINE__, i, (targetsArray[i])->str); 
+        // //pwg_debug("Target-%02d : '%s'\n", __FILE__, __LINE__, i, (targetsArray[i])->str); 
 
-//        if ( catId > 0 ) {
-//        	count = sprintf(expression, "$.result.categories[?(@.id_uppercat==%s) and ?(@.name==%s].id", "null", (targetsArray[i])->str);
-//        }
-//        else {
-//        	count = sprintf(expression, "$.result.categories[?(@.id_uppercat==%lu) and ?(@.name==%s].id", catId, (targetsArray[i])->str);
-//        }
-//        if ( count > 0 && count < 2048 ) {
-//          JsonNode * catResult = json_path_query(expression, rootNode, NULL);
-//
-//          catId = json_node_get_int(catResult);
-//
-//          pwg_debug("Target-%02d : '%s'\n", __FILE__, __LINE__, i, (targetsArray[i])->str);
-//        }
-      }
-    }
-  }
+// //        if ( catId > 0 ) {
+// //         count = sprintf(expression, "$.result.categories[?(@.id_uppercat==%s) and ?(@.name==%s].id", "null", (targetsArray[i])->str);
+// //        }
+// //        else {
+// //         count = sprintf(expression, "$.result.categories[?(@.id_uppercat==%lu) and ?(@.name==%s].id", catId, (targetsArray[i])->str);
+// //        }
+// //        if ( count > 0 && count < 2048 ) {
+// //          JsonNode * catResult = json_path_query(expression, rootNode, NULL);
+// //
+// //          catId = json_node_get_int(catResult);
+// //
+// //          pwg_debug("Target-%02d : '%s'\n", __FILE__, __LINE__, i, (targetsArray[i])->str);
+// //        }
+      // }
+    // }
+  // }
 
-//  if ( callPWG(context, response, NULL, DT_PIWIGO_API_CATEGORY_GETLIST PWG_GETLIST_RECURSIVE PWG_GETLIST_TREE) )
+//  if ( pwg_call(context, response, NULL, DT_PIWIGO_API_CATEGORY_GETLIST PWG_GETLIST_RECURSIVE PWG_GETLIST_TREE) )
 //  {
 //
 //    // api call succeeded, now parse response
@@ -1171,88 +1216,24 @@ static int pwg_createCategoryPath(dt_module_imageio_storage_piwigo_context_t *co
   return id;
 }
 
-static gboolean pwg_login(dt_module_imageio_storage_piwigo_context_t *context)
-{
-  //CURL *curl;
-//  char curl_errbuf[CURL_ERROR_SIZE];
-//  CURLcode res;
-  GString *response = g_string_new("");
-  gboolean result = FALSE;
-  char *postbuffer = malloc(NAME_MAX);
-  
-  /* specify the POST data */
-  memset(postbuffer, 0, NAME_MAX);
-  snprintf(postbuffer, NAME_MAX, "username=%s&password=%s", gtk_entry_get_text(GTK_ENTRY(context->ui->username)), gtk_entry_get_text(GTK_ENTRY(context->ui->password)));
- 
-  if ( callPWG(context, response, postbuffer, DT_PIWIGO_API_SESSION_LOGIN) )
-  {
-    // api call succeeded, now parse response
-#ifdef DT_PIWIGO_DEBUG
-    g_printf("Calling Json Parser:\n%s\n---\n", response->str);
-#endif
-    JsonObject *rootObject = parse_json_response(context, response);
-    if ( rootObject ) {
-      if ( 0 == strcmp("ok", json_object_get_string_member(rootObject, "stat") ) ) {
-        result = json_object_get_boolean_member(rootObject, "result");
-        // clear password field
-        gtk_entry_set_text(GTK_ENTRY(context->ui->password), "");
-      }
-    }
-  }
-
-  // free temporary buffers as soon as possible
-  free(postbuffer);
-  g_string_free(response, TRUE);
-
-#ifdef DT_PIWIGO_DEBUG
-    g_printf("Result of pwg_login(): %s\n",  result ? "true" : "false");
-#endif
-  return result;
-}
-
-
-static gboolean pwg_logout(dt_module_imageio_storage_piwigo_context_t *context)
-{
- // CURL *curl;
-//  char curl_errbuf[CURL_ERROR_SIZE];
- // CURLcode res;
-  GString *response = g_string_new("");
-  gboolean result = FALSE;
-
-  result = callPWG(context, response, NULL, DT_PIWIGO_API_SESSION_LOGOUT);
-    if ( result )
-  {
-    // api call succeeded, now parse response
-#ifdef DT_PIWIGO_DEBUG    
-    g_printf("Calling Json Parser:\n%s\n---\n", response->str);
-#endif
-      JsonObject *rootObject = parse_json_response(context, response);
-      if ( 0 == strcmp("ok", json_object_get_string_member(rootObject, "stat") ) ) {
-        result = json_object_get_boolean_member(rootObject, "result");
-      }
-  }
-  
-  g_string_free(response, TRUE);
-  return result;
-}
 
 static void config_changed_callback(GtkEntry *entry, gpointer user_data)
 {
-  dt_module_imageio_storage_piwigo_context_t *context = (dt_module_imageio_storage_piwigo_context_t *) ((dt_imageio_module_storage_t *) user_data)->gui_data;
+  dt_module_imageio_storage_piwigo_ui_t *ui = (dt_module_imageio_storage_piwigo_ui_t *) ((dt_imageio_module_storage_t *) user_data)->gui_data;
   
-  if ( GTK_WIDGET(entry) == context->ui->album )
+  if ( GTK_WIDGET(entry) == ui->album )
   {
     dt_conf_set_string("plugins/imageio/storage/piwigo/album", gtk_entry_get_text(entry));
-    if ( !context->path ) {
-    	context->path = (char *) malloc(PATH_MAX * sizeof(char));
+    if ( !ui->context->path ) {
+      ui->context->path = (char *) malloc(PATH_MAX * sizeof(char));
     }
-    snprintf(context->path, PATH_MAX, "%s", gtk_entry_get_text(entry));
+    snprintf(ui->context->path, PATH_MAX, "%s", gtk_entry_get_text(entry));
   }
-  else if ( GTK_WIDGET(entry) == context->ui->site )
+  else if ( GTK_WIDGET(entry) == ui->site )
   {
     dt_conf_set_string("plugins/imageio/storage/piwigo/site", gtk_entry_get_text(entry));
   }
-  else if ( GTK_WIDGET(entry) == context->ui->username )
+  else if ( GTK_WIDGET(entry) == ui->username )
   {
     dt_conf_set_string("plugins/imageio/storage/piwigo/username", gtk_entry_get_text(entry));
   }
