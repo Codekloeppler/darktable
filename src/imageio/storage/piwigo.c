@@ -574,10 +574,10 @@ void gui_cleanup(struct dt_imageio_module_storage_t *self)
         }
         if ( ui->context->curl )
         {
-          /* always cleanup */
-          curl_easy_cleanup(ui->context->curl);
-          curl_global_cleanup();
-          ui->context->curl = NULL;
+        	/* always cleanup */
+        	curl_easy_cleanup(ui->context->curl);
+        	curl_global_cleanup();
+        	ui->context->curl = NULL;
         }
         if (ui->context->site) 
         {
@@ -718,7 +718,9 @@ int initialize_store(struct dt_imageio_module_storage_t *self, struct dt_imageio
   printf("UI Path: '%s'\n", gtk_entry_get_text(GTK_ENTRY(ui->album)));
   //pwg_debug("UI Path: '%s'\n", __FILE__,__LINE__,gtk_entry_get_text(GTK_ENTRY(context->ui->album)));
   //categoryId = pwg_createCategoryPath(context, dt_variables_expand( context->params, (char *) gtk_entry_get_text(GTK_ENTRY(context->ui->album)), TRUE));
+
   categoryId = 0; //pwg_createCategoryPath(ui, "Exkurse/Hodenhagen");
+
   if ( categoryId >= 0 ) {
     result = DT_PIWIGO_SUCCESS;
   }
@@ -821,10 +823,6 @@ int store(struct dt_imageio_module_storage_t *self, struct dt_imageio_module_dat
 
   return result;
 }
-
-
-
-
 
 //
 //static bool uploadFile(dt_module_imageio_storage_piwigo_context_t *context, const char *displayname, const char * file)
@@ -975,7 +973,8 @@ size_t params_size(struct dt_imageio_module_storage_t *self)
 
 void *get_params(struct dt_imageio_module_storage_t *self)
 {
-  dt_module_imageio_storage_piwigo_ui_t *ui = (dt_module_imageio_storage_piwigo_ui_t *) self->gui_data;
+	dt_module_imageio_storage_piwigo_ui_t *ui = (dt_module_imageio_storage_piwigo_ui_t *) self->gui_data;
+
   if(!ui) return NULL; // gui not initialized, CLI mode
   if(ui->context == NULL || ui->context->auth->token == NULL)
   {
@@ -1069,6 +1068,7 @@ static void pwg_debug(const char *format, const char *file, size_t line, ...) {
  * "[/]rootCategory/subCategory_1/Category\/with\/slashes/leafCategory"
  * leading slash is optional
  */
+
 // static int pwg_createCategoryPath(dt_module_imageio_storage_piwigo_ui_t *ui, const char * path) {
   // int id = -1;
   // GString *response = g_string_new("");
@@ -1215,6 +1215,7 @@ static void pwg_debug(const char *format, const char *file, size_t line, ...) {
   
   return id;
 }
+
 
 
 static void config_changed_callback(GtkEntry *entry, gpointer user_data)
