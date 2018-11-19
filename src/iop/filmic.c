@@ -231,7 +231,7 @@ void process(dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const void *c
   const float saturation = data->saturation / 100.0f;
 
 #ifdef _OPENMP
-#pragma omp parallel for SIMD() default(none) shared(data, stderr) schedule(static)
+#pragma omp parallel for SIMD() default(none) shared(data) schedule(static)
 #endif
   for(size_t j = 0; j < roi_out->height; j++)
   {
@@ -263,12 +263,16 @@ void process(dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const void *c
 
       dt_prophotorgb_to_XYZ(rgb, XYZ);
 
+      const float luma = XYZ[1];
+      const float mid_distance = 4.0f * (luma - 0.5f) * (luma - 0.5f);
+
       for(size_t c = 0; c < 3; c++)
       {
         // Desaturate on the non-linear parts of the curve
-        const float mid_distance = 4.0f * (XYZ[1] - 0.5f) * (XYZ[1] - 0.5f);
-        const float concavity = data->grad_2[index[c]] / data->max_grad;
-        rgb[c] = XYZ[1] + CLAMP(1.0f - data->contrast * mid_distance * concavity / saturation, 0.0f, 1.0f) * (rgb[c] - XYZ[1]);
+        const float concavity = data->grad_2[index[c]];
+        const float bounds = 1.0f / (1.0f - luma);
+        const float factor = CLAMP(1.0f - bounds * mid_distance * concavity / saturation, 0.0f, 1.0f);
+        rgb[c] = luma + factor * (rgb[c] - luma);
 
         // Apply the transfer function of the display
         rgb[c] = powf(CLAMP(rgb[c], 0.0f, 1.0f), data->output_power);
@@ -297,7 +301,8 @@ void process_sse2(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, c
 
   const int ch = piece->colors;
 
-  const float saturation = data->saturation / 100.0f;
+  const float sat = data->saturation / 100.0f;
+  const __m128 saturation = _mm_setr_ps(sat, sat, sat, 0.0f);
 
   const __m128 grey = _mm_setr_ps(data->grey_source, data->grey_source, data->grey_source, 0.0f);
   const __m128 black = _mm_setr_ps(data->black_source, data->black_source, data->black_source, 0.0f);
@@ -308,6 +313,8 @@ void process_sse2(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, c
   const __m128 EPS = _mm_setr_ps(eps, eps, eps, 0.0f);
   const __m128 zero = _mm_setzero_ps();
   const __m128 one = _mm_set1_ps(1.0f);
+  const __m128 four = _mm_set1_ps(4.0f);
+  const __m128 half = _mm_set1_ps(0.5f);
 
 #ifdef _OPENMP
 #pragma omp parallel for default(none) shared(data) schedule(static)
@@ -330,33 +337,37 @@ void process_sse2(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, c
       rgb = _mm_max_ps(rgb, zero);
       rgb = _mm_min_ps(rgb, one);
 
+      // Unpack SSE vector to regular array
       float rgb_unpack[4] = { _mm_vectorGetByIndex(rgb, 0),
                               _mm_vectorGetByIndex(rgb, 1),
                               _mm_vectorGetByIndex(rgb, 2),
                               _mm_vectorGetByIndex(rgb, 3) };
 
-      int index[3];
+      int index[4];
+      float derivative[4];
 
       for (size_t c = 0; c < 3; ++c)
       {
         // Filmic S curve
         index[c] = CLAMP(rgb_unpack[c] * 0x10000ul, 0, 0xffff);
         rgb_unpack[c] = data->table[index[c]];
+        derivative[c] = data->grad_2[index[c]];
       }
 
       rgb = _mm_load_ps(rgb_unpack);
+
+      // Desaturate on the non-linear parts of the curve
       XYZ = dt_prophotoRGB_to_XYZ_sse2(rgb);
+      const __m128 luma = _mm_set1_ps(_mm_vectorGetByIndex(XYZ, 1));
+      const __m128 mid_distance = four * (luma - half) * (luma - half);
+      const __m128 concavity = _mm_load_ps(derivative); // derivative
+      const __m128 bounds = one / (one - luma);
 
-      for (size_t c = 0; c < 3; ++c)
-      {
-        // Desaturate on the non-linear parts of the curve
-        const float luma = _mm_vectorGetByIndex(XYZ, 1);
-        const float mid_distance = 4.0f * (luma - 0.5f) * (luma - 0.5f);
-        const float concavity = data->grad_2[index[c]] / data->max_grad;
-        rgb_unpack[c] = luma + CLAMP(1.0f - data->contrast * mid_distance * concavity / saturation, 0.0f, 1.0f) * (rgb_unpack[c] - luma);
-      }
+      __m128 factor = one - (bounds * mid_distance * concavity)  / saturation;
+      factor = _mm_max_ps(factor, zero);
+      factor = _mm_min_ps(factor, one);
 
-      rgb = _mm_load_ps(rgb_unpack);
+      rgb = luma + factor * (rgb - luma);
       rgb = _mm_max_ps(rgb, zero);
       rgb = _mm_min_ps(rgb, one);
 
@@ -405,7 +416,6 @@ int process_cl(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_m
   const float saturation = d->saturation / 100.0f;
   const float contrast = d->contrast;
   const float power = d->output_power;
-  const float max_grad = d->max_grad;
 
   dt_opencl_set_kernel_arg(devid, gd->kernel_filmic, 0, sizeof(cl_mem), (void *)&dev_in);
   dt_opencl_set_kernel_arg(devid, gd->kernel_filmic, 1, sizeof(cl_mem), (void *)&dev_out);
@@ -419,7 +429,6 @@ int process_cl(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_m
   dt_opencl_set_kernel_arg(devid, gd->kernel_filmic, 9, sizeof(float), (void *)&saturation);
   dt_opencl_set_kernel_arg(devid, gd->kernel_filmic, 10, sizeof(float), (void *)&contrast);
   dt_opencl_set_kernel_arg(devid, gd->kernel_filmic, 11, sizeof(float), (void *)&power);
-  dt_opencl_set_kernel_arg(devid, gd->kernel_filmic, 12, sizeof(float), (void *)&max_grad);
 
   err = dt_opencl_enqueue_kernel_2d(devid, gd->kernel_filmic, sizes);
   if(err != CL_SUCCESS) goto error;
@@ -1049,25 +1058,21 @@ void commit_params(dt_iop_module_t *self, dt_iop_params_t *p1, dt_dev_pixelpipe_
   // compute the curves and their LUT
   compute_curve_lut(p, d->table, d->table_temp, 0x10000);
 
-  // Get the second order centered discrete difference of the tone curve
-  // The second derivative is 0 on the linear parts of the curve, and non-zero where
-  // we have a curvature. This will be used to selectively desaturate the non-linear parts
+  // Build a window function based on the log.
+  // This will be used to selectively desaturate the non-linear parts
   // to avoid over-saturation in the toe and shoulder.
 
-  d->max_grad = 0.00000001f; // avoid 0 division
-
-/*
 #ifdef _OPENMP
 #pragma omp parallel for SIMD() default(none) shared(d) schedule(static)
 #endif
-* */
   for(int k = 1; k < 65535; k++)
   {
-    d->grad_2[k] = fabsf(- d->table[k] * 2.0f + d->table[k-1] + d->table[k+1]) / 2.0f;
-    if (d->grad_2[k] > d->max_grad) d->max_grad = d->grad_2[k];
+    const float x = ((float)k) / 65536.0f;
+    //d->grad_2[k] = fabsf(-d->table[k] * 2.0f + d->table[k-1] + d->table[k+1]) / 2.0f;
+    d->grad_2[k] = powf(2.0f, (-dynamic_range * x));
   }
-  d->grad_2[0] = d->max_grad;
-  d->grad_2[65535] = d->max_grad;
+  d->grad_2[0] = 1.0f;
+  d->grad_2[65535] = 1.0f;
 
 }
 
@@ -1135,7 +1140,7 @@ void init(dt_iop_module_t *module)
                                  .output_power        = 2.2,  // target power (~ gamma)
                                  .latitude_stops      = 2.0,  // intent latitude
                                  .contrast            = 1.333,  // intent contrast
-                                 .saturation          = 100.0,   // intent saturation
+                                 .saturation          = 20.0,   // intent saturation
                                  .balance             = 0.0, // balance shadows/highlights
                                  .interpolator        = CUBIC_SPLINE //interpolator
                               };
@@ -1235,7 +1240,7 @@ void gui_init(dt_iop_module_t *self)
   gtk_widget_set_tooltip_text(GTK_WIDGET(g->area), _("double click to reset curve"));
   g_signal_connect(G_OBJECT(g->area), "draw", G_CALLBACK(dt_iop_tonecurve_draw), self);
 
-  gtk_box_pack_start(GTK_BOX(self->widget), dt_ui_section_label_new(_("logarithmic tone-mapping")), FALSE, FALSE, 5);
+  gtk_box_pack_start(GTK_BOX(self->widget), dt_ui_section_label_new(_("logarithmic shaper")), FALSE, FALSE, 5);
 
   // grey_point_source slider
   g->grey_point_source = dt_bauhaus_slider_new_with_range(self, 0.1, 100., 0.1, p->grey_point_source, 2);
@@ -1249,17 +1254,6 @@ void gui_init(dt_iop_module_t *self)
   dt_bauhaus_widget_set_quad_toggle(g->grey_point_source, TRUE);
   g_signal_connect(G_OBJECT(g->grey_point_source), "quad-pressed", G_CALLBACK(dt_iop_color_picker_callback), &g->color_picker);
 
-  // Black slider
-  g->black_point_source = dt_bauhaus_slider_new_with_range(self, -16.0, -0.5, 0.1, p->black_point_source, 2);
-  dt_bauhaus_widget_set_label(g->black_point_source, NULL, _("black relative exposure"));
-  gtk_box_pack_start(GTK_BOX(self->widget), g->black_point_source, TRUE, TRUE, 0);
-  dt_bauhaus_slider_set_format(g->black_point_source, "%.2f EV");
-  gtk_widget_set_tooltip_text(g->black_point_source, _("number of stops between middle grey and pure black\nthis is a reading a posemeter would give you on the scene"));
-  g_signal_connect(G_OBJECT(g->black_point_source), "value-changed", G_CALLBACK(black_point_source_callback), self);
-  dt_bauhaus_widget_set_quad_paint(g->black_point_source, dtgtk_cairo_paint_colorpicker, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER, NULL);
-  dt_bauhaus_widget_set_quad_toggle(g->black_point_source, TRUE);
-  g_signal_connect(G_OBJECT(g->black_point_source), "quad-pressed", G_CALLBACK(dt_iop_color_picker_callback), &g->color_picker);
-
   // White slider
   g->white_point_source = dt_bauhaus_slider_new_with_range(self, 0.5, 16.0, 0.1, p->white_point_source, 2);
   dt_bauhaus_widget_set_label(g->white_point_source, NULL, _("white relative exposure"));
@@ -1271,12 +1265,25 @@ void gui_init(dt_iop_module_t *self)
   dt_bauhaus_widget_set_quad_toggle(g->white_point_source, TRUE);
   g_signal_connect(G_OBJECT(g->white_point_source), "quad-pressed", G_CALLBACK(dt_iop_color_picker_callback), &g->color_picker);
 
+  // Black slider
+  g->black_point_source = dt_bauhaus_slider_new_with_range(self, -16.0, -0.5, 0.1, p->black_point_source, 2);
+  dt_bauhaus_widget_set_label(g->black_point_source, NULL, _("black relative exposure"));
+  gtk_box_pack_start(GTK_BOX(self->widget), g->black_point_source, TRUE, TRUE, 0);
+  dt_bauhaus_slider_set_format(g->black_point_source, "%.2f EV");
+  gtk_widget_set_tooltip_text(g->black_point_source, _("number of stops between middle grey and pure black\nthis is a reading a posemeter would give you on the scene"));
+  g_signal_connect(G_OBJECT(g->black_point_source), "value-changed", G_CALLBACK(black_point_source_callback), self);
+  dt_bauhaus_widget_set_quad_paint(g->black_point_source, dtgtk_cairo_paint_colorpicker, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER, NULL);
+  dt_bauhaus_widget_set_quad_toggle(g->black_point_source, TRUE);
+  g_signal_connect(G_OBJECT(g->black_point_source), "quad-pressed", G_CALLBACK(dt_iop_color_picker_callback), &g->color_picker);
+
   // Security factor
   g->security_factor = dt_bauhaus_slider_new_with_range(self, -200., 200., 1.0, p->security_factor, 2);
-  dt_bauhaus_widget_set_label(g->security_factor, NULL, _("auto tuning security factor"));
+  dt_bauhaus_widget_set_label(g->security_factor, NULL, _("auto tuning safety factor"));
+  dt_bauhaus_widget_set_label(g->security_factor, NULL, _("safety factor"));
   gtk_box_pack_start(GTK_BOX(self->widget), g->security_factor, TRUE, TRUE, 0);
   dt_bauhaus_slider_set_format(g->security_factor, "%.2f %%");
-  gtk_widget_set_tooltip_text(g->security_factor, _("enlarge or shrink the computed dynamic range"));
+  gtk_widget_set_tooltip_text(g->security_factor, _("enlarge or shrink the computed dynamic range\n"
+                                                    "useful in conjunction with \"auto tune levels\""));
   g_signal_connect(G_OBJECT(g->security_factor), "value-changed", G_CALLBACK(security_threshold_callback), self);
 
   // Auto tune slider
@@ -1316,7 +1323,7 @@ void gui_init(dt_iop_module_t *self)
   g_signal_connect(G_OBJECT(g->balance), "value-changed", G_CALLBACK(balance_callback), self);
 
   // saturation slider
-  g->saturation = dt_bauhaus_slider_new_with_range(self, 100., 1000., 1., p->saturation, 2);
+  g->saturation = dt_bauhaus_slider_new_with_range(self, 0.01, 100., 0.05, p->saturation, 2);
   dt_bauhaus_widget_set_label(g->saturation, NULL, _("saturation"));
   dt_bauhaus_slider_set_format(g->saturation, "%.2f %%");
   gtk_box_pack_start(GTK_BOX(self->widget), g->saturation, TRUE, TRUE, 0);

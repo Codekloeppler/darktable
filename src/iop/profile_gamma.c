@@ -471,6 +471,8 @@ static void security_threshold_callback(GtkWidget *slider, gpointer user_data)
   dt_iop_profilegamma_params_t *p = (dt_iop_profilegamma_params_t *)self->params;
   dt_iop_profilegamma_gui_data_t *g = (dt_iop_profilegamma_gui_data_t *)self->gui_data;
 
+  dt_iop_color_picker_reset(&g->color_picker, TRUE);
+
   float previous = p->security_factor;
   p->security_factor = dt_bauhaus_slider_get(slider);
   float ratio = (p->security_factor - previous) / (previous + 100.0f);
@@ -530,6 +532,10 @@ static void grey_point_callback(GtkWidget *slider, gpointer user_data)
 {
   dt_iop_module_t *self = (dt_iop_module_t *)user_data;
   if(self->dt->gui->reset) return;
+  
+  dt_iop_profilegamma_gui_data_t *g = (dt_iop_profilegamma_gui_data_t *)self->gui_data;
+  dt_iop_color_picker_reset(&g->color_picker, TRUE);
+
   dt_iop_profilegamma_params_t *p = (dt_iop_profilegamma_params_t *)self->params;
   p->grey_point = dt_bauhaus_slider_get(slider);
   dt_dev_add_history_item(darktable.develop, self, TRUE);
@@ -539,6 +545,10 @@ static void dynamic_range_callback(GtkWidget *slider, gpointer user_data)
 {
   dt_iop_module_t *self = (dt_iop_module_t *)user_data;
   if(self->dt->gui->reset) return;
+
+  dt_iop_profilegamma_gui_data_t *g = (dt_iop_profilegamma_gui_data_t *)self->gui_data;
+  dt_iop_color_picker_reset(&g->color_picker, TRUE);
+
   dt_iop_profilegamma_params_t *p = (dt_iop_profilegamma_params_t *)self->params;
   p->dynamic_range = dt_bauhaus_slider_get(slider);
   dt_dev_add_history_item(darktable.develop, self, TRUE);
@@ -548,6 +558,10 @@ static void shadows_range_callback(GtkWidget *slider, gpointer user_data)
 {
   dt_iop_module_t *self = (dt_iop_module_t *)user_data;
   if(self->dt->gui->reset) return;
+
+  dt_iop_profilegamma_gui_data_t *g = (dt_iop_profilegamma_gui_data_t *)self->gui_data;
+  dt_iop_color_picker_reset(&g->color_picker, TRUE);
+
   dt_iop_profilegamma_params_t *p = (dt_iop_profilegamma_params_t *)self->params;
   p->shadows_range = dt_bauhaus_slider_get(slider);
   dt_dev_add_history_item(darktable.develop, self, TRUE);
@@ -786,7 +800,7 @@ void init(dt_iop_module_t *module)
   module->params = calloc(1, sizeof(dt_iop_profilegamma_params_t));
   module->default_params = calloc(1, sizeof(dt_iop_profilegamma_params_t));
   module->default_enabled = 0;
-  module->priority = 328; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 342; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_profilegamma_params_t);
   module->gui_data = NULL;
   dt_iop_profilegamma_params_t tmp
@@ -908,7 +922,7 @@ void gui_init(dt_iop_module_t *self)
   // Security factor
   gtk_box_pack_start(GTK_BOX(vbox_log), dt_ui_section_label_new(_("optimize automatically")), FALSE, FALSE, 5);
   g->security_factor = dt_bauhaus_slider_new_with_range(self, -100., 100., 0.1, p->security_factor, 2);
-  dt_bauhaus_widget_set_label(g->security_factor, NULL, _("security factor"));
+  dt_bauhaus_widget_set_label(g->security_factor, NULL, _("safety factor"));
   gtk_box_pack_start(GTK_BOX(vbox_log), g->security_factor, TRUE, TRUE, 0);
   dt_bauhaus_slider_set_format(g->security_factor, "%.2f %%");
   gtk_widget_set_tooltip_text(g->security_factor, _("enlarge or shrink the computed dynamic range\nthis is usefull when noise perturbates the measurements"));
