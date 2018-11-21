@@ -328,7 +328,7 @@ void gui_init(struct dt_imageio_module_storage_t *self)
   gtk_widget_set_tooltip_text(ui->site, _("piwigo server site"));
   gtk_entry_set_width_chars(GTK_ENTRY(ui->site), 0);
   
-  // fill site input with config  
+  // fill site input from config  
   gchar *url = dt_conf_get_string("plugins/imageio/storage/piwigo/site");
   if(url)
   {
@@ -422,7 +422,6 @@ void gui_init(struct dt_imageio_module_storage_t *self)
   return;
 }
 
-
 /* destroy resources */
 void gui_cleanup(struct dt_imageio_module_storage_t *self)
 {
@@ -430,10 +429,13 @@ void gui_cleanup(struct dt_imageio_module_storage_t *self)
 
   if ( ui )
   {
+    dt_conf_set_string("plugins/imageio/storage/piwigo/username", gtk_entry_get_text(GTK_WIDGET(ui->username)));
+    dt_conf_set_string("plugins/imageio/storage/piwigo/site", gtk_entry_get_text(GTK_WIDGET(ui->site)));
+    dt_conf_set_string("plugins/imageio/storage/piwigo/album", gtk_entry_get_text(GTK_WIDGET(ui->album)));
     if ( ui->context ) 
-    { 
+    {
         if ( ui->context->auth)
-        {      
+        {
           if (ui->context->auth->username) 
           {
             free(ui->context->auth->username);
@@ -461,10 +463,10 @@ void gui_cleanup(struct dt_imageio_module_storage_t *self)
         }
         if ( ui->context->curl )
         {
-        	/* always cleanup */
-        	curl_easy_cleanup(ui->context->curl);
-        	curl_global_cleanup();
-        	ui->context->curl = NULL;
+          /* always cleanup */
+          curl_easy_cleanup(ui->context->curl);
+          curl_global_cleanup();
+          ui->context->curl = NULL;
         }
         if (ui->context->site) 
         {
@@ -491,14 +493,13 @@ void gui_cleanup(struct dt_imageio_module_storage_t *self)
   }
   return;
 }
+
 /* reset options to defaults */
 void gui_reset(struct dt_imageio_module_storage_t *self)
 {
   dt_module_imageio_storage_piwigo_ui_t *ui = self->gui_data;
-  dt_module_imageio_storage_piwigo_context_t *context = ( ui ? ui->context : NULL);
-  dt_module_imageio_storage_piwigo_auth_t *auth = ( context ? context->auth : NULL);
   
-  if ( !ui || !context || !auth )
+  if ( !ui || !ui->context || !ui->context->auth )
   {
     // something's wrong - full reset to initial state!
     gui_cleanup(self);
@@ -506,24 +507,24 @@ void gui_reset(struct dt_imageio_module_storage_t *self)
     pwg_init(&ui);
   }
 
-  auth->sslPeer = TRUE;
-  auth->registered = FALSE;
-  auth->username = NULL;
-  auth->token = NULL;
-  context->parser = json_parser_new ();
-  context->supported_file_types = NULL;
+  ui->context->auth->sslPeer = TRUE;
+  ui->context->auth->registered = FALSE;
+  ui->context->auth->username = NULL;
+  ui->context->auth->token = NULL;
+  ui->context->parser = json_parser_new ();
+  ui->context->supported_file_types = NULL;
 
   // TODO - 20181102, codeklöppler: Reset gui elements content
-  context->site = dt_conf_get_string("plugins/imageio/storage/piwigo/site");
-  if(context->site)
+  ui->context->site = dt_conf_get_string("plugins/imageio/storage/piwigo/site");
+  if(ui->context->site)
   {
-    gtk_entry_set_text(GTK_ENTRY(ui->site), context->site);
+    gtk_entry_set_text(GTK_ENTRY(ui->site), ui->context->site);
   }
   
-  auth->username = dt_conf_get_string("plugins/imageio/storage/piwigo/username");
-  if(auth->username)
+  ui->context->auth->username = dt_conf_get_string("plugins/imageio/storage/piwigo/username");
+  if(ui->context->auth->username)
   {
-    gtk_entry_set_text(GTK_ENTRY(ui->username), auth->username);
+    gtk_entry_set_text(GTK_ENTRY(ui->username), ui->context->auth->username);
   }
   
   gchar * password = dt_conf_get_string("plugins/imageio/storage/piwigo/password");
@@ -534,9 +535,9 @@ void gui_reset(struct dt_imageio_module_storage_t *self)
   }
   
   context->path = dt_conf_get_string("plugins/imageio/storage/piwigo/album");
-  if(context->path)
+  if(ui->context->path)
   {
-    gtk_entry_set_text(GTK_ENTRY(ui->album), context->path);
+    gtk_entry_set_text(GTK_ENTRY(ui->album), ui->context->path);
   }
   
   return;
@@ -547,20 +548,43 @@ int supported(struct dt_imageio_module_storage_t *self, struct dt_imageio_module
 {
   dt_module_imageio_storage_piwigo_ui_t *ui = self->gui_data;
   int result = DT_PIWIGO_NO;
-
-  if ( ui->context->supported_file_types )
+  // Only call, when logged in
+  if ( ui->context->auth->registered \
+        && pwg_call(ui, response, NULL, DT_PIWIGO_API_SESSION_GET_STATUS) )
   {
-    // "jpg,jpeg,png,gif" from pwg.session.getStatus => $.result.upload_file_types
-    // TODO - change to parsing of supported_fie_types
-
-    if ( ( strcmp(format->mime(NULL) ,"image/jpeg") == 0 )
-         || ( strcmp(format->mime(NULL) ,"image/png") ==  0 )
-         || ( strcmp(format->mime(NULL) ,"image/gif") ==  0 ) )
+    // api call succeeded, now parse response
+#     ifdef DT_PIWIGO_DEBUG
+      g_printf("Response of JSON-Parser:\n%s\n---\n", response->str);
+#     endif
+    JsonObject *rootObject = parse_json_response(ui->context, response);
+    if ( rootObject ) 
     {
-      result = DT_PIWIGO_YES;
+      if ( 0 == strcmp("ok", json_object_get_string_member(rootObject, "stat") ) ) 
+      {
+        result = json_object_get_object_member(rootObject, "result");
+        gchar * upload_file_types = strdup(json_object_get_string_member(result, "upload_file_types"));
+        if ( upload_file_types ) 
+        {
+          gchar * filetype = strtok(upload_file_types,",");
+          while ( filetype ) 
+          {
+            gchar mimetype[50] = "";
+            snprintf(mimetype, "image/%s", filetype);
+            if ( ( strcmp(format->mime(NULL) ,mimetype) == 0 ))
+            {
+              result = DT_PIWIGO_YES;
+              break;
+            }
+            filetype = strtok(upload_file_types, NULL);
+          }
+          free(upload_file_types);
+        }
+        else{
+           dt_control_log(_("Not logged in with admin privileges"));
+        }
+      }
     }
   }
-
   return result;
 }
 
