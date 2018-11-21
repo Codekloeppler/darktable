@@ -85,7 +85,10 @@ pwg_init(dt_module_imageio_storage_piwigo_ui_t **ui);
 
 static void 
 pwg_login_button_clicked(GtkWidget *widget, dt_imageio_module_storage_t *self);
-//pwg_clicked_login_button
+
+static void
+pwg_password_entry_activated(GtkWidget *widget, dt_imageio_module_storage_t *self);
+
 static void 
 config_changed_callback(GtkEntry *entry, gpointer user_data);
 
@@ -104,11 +107,11 @@ pwg_logout(dt_module_imageio_storage_piwigo_ui_t *ui);
 static gboolean 
 pwg_call(dt_module_imageio_storage_piwigo_ui_t *ui, GString *response, const char* postdata, const char *method);
 
-static void 
-pwg_debug(const char *format, const char *file, size_t line, ...);
+//static void
+//pwg_debug(const char *format, const char *file, size_t line, ...);
 
-static void 
-_finalize_store(gpointer user_data);
+static int
+pwg_finalize_store(gpointer user_data);
 
 //static int pwg_createCategoryPath(dt_module_imageio_storage_piwigo_ui_t *ui, const char * path);
 //static void ui_refresh_albums_fill(PicasaAlbum *album, GtkListStore *list_store);

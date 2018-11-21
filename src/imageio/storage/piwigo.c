@@ -118,14 +118,14 @@ static gboolean pwg_logout(dt_module_imageio_storage_piwigo_ui_t *ui)
   GString *response = g_string_new("");
   gboolean result = FALSE;
 
-  result = pwg_call(context, response, NULL, DT_PIWIGO_API_SESSION_LOGOUT);
+  result = pwg_call(ui, response, NULL, DT_PIWIGO_API_SESSION_LOGOUT);
     if ( result )
   {
     // api call succeeded, now parse response
 #ifdef DT_PIWIGO_DEBUG    
     g_printf("Calling Json Parser:\n%s\n---\n", response->str);
 #endif
-      JsonObject *rootObject = parse_json_response(context, response);
+      JsonObject *rootObject = parse_json_response(ui->context, response);
       if ( 0 == strcmp("ok", json_object_get_string_member(rootObject, "stat") ) ) {
         result = json_object_get_boolean_member(rootObject, "result");
       }
@@ -429,9 +429,9 @@ void gui_cleanup(struct dt_imageio_module_storage_t *self)
 
   if ( ui )
   {
-    dt_conf_set_string("plugins/imageio/storage/piwigo/username", gtk_entry_get_text(GTK_WIDGET(ui->username)));
-    dt_conf_set_string("plugins/imageio/storage/piwigo/site", gtk_entry_get_text(GTK_WIDGET(ui->site)));
-    dt_conf_set_string("plugins/imageio/storage/piwigo/album", gtk_entry_get_text(GTK_WIDGET(ui->album)));
+    dt_conf_set_string("plugins/imageio/storage/piwigo/username", gtk_entry_get_text(GTK_ENTRY(ui->username)));
+    dt_conf_set_string("plugins/imageio/storage/piwigo/site", gtk_entry_get_text(GTK_ENTRY(ui->site)));
+    dt_conf_set_string("plugins/imageio/storage/piwigo/album", gtk_entry_get_text(GTK_ENTRY(ui->album)));
     if ( ui->context ) 
     {
         if ( ui->context->auth)
@@ -534,7 +534,7 @@ void gui_reset(struct dt_imageio_module_storage_t *self)
     free(password);
   }
   
-  context->path = dt_conf_get_string("plugins/imageio/storage/piwigo/album");
+  ui->context->path = dt_conf_get_string("plugins/imageio/storage/piwigo/album");
   if(ui->context->path)
   {
     gtk_entry_set_text(GTK_ENTRY(ui->album), ui->context->path);
@@ -547,7 +547,8 @@ void gui_reset(struct dt_imageio_module_storage_t *self)
 int supported(struct dt_imageio_module_storage_t *self, struct dt_imageio_module_format_t *format)
 {
   dt_module_imageio_storage_piwigo_ui_t *ui = self->gui_data;
-  int result = DT_PIWIGO_NO;
+  int rc = DT_PIWIGO_NO;
+  GString *response = g_string_new("");
   // Only call, when logged in
   if ( ui->context->auth->registered \
         && pwg_call(ui, response, NULL, DT_PIWIGO_API_SESSION_GET_STATUS) )
@@ -561,7 +562,7 @@ int supported(struct dt_imageio_module_storage_t *self, struct dt_imageio_module
     {
       if ( 0 == strcmp("ok", json_object_get_string_member(rootObject, "stat") ) ) 
       {
-        result = json_object_get_object_member(rootObject, "result");
+        JsonObject *result = json_object_get_object_member(rootObject, "rc");
         gchar * upload_file_types = strdup(json_object_get_string_member(result, "upload_file_types"));
         if ( upload_file_types ) 
         {
@@ -569,13 +570,13 @@ int supported(struct dt_imageio_module_storage_t *self, struct dt_imageio_module
           while ( filetype ) 
           {
             gchar mimetype[50] = "";
-            snprintf(mimetype, "image/%s", filetype);
+            sprintf(mimetype, "image/%s", filetype);
             if ( ( strcmp(format->mime(NULL) ,mimetype) == 0 ))
             {
-              result = DT_PIWIGO_YES;
+              rc = DT_PIWIGO_YES;
               break;
             }
-            filetype = strtok(upload_file_types, NULL);
+            filetype = strtok(upload_file_types, ",");
           }
           free(upload_file_types);
         }
@@ -585,7 +586,7 @@ int supported(struct dt_imageio_module_storage_t *self, struct dt_imageio_module
       }
     }
   }
-  return result;
+  return rc;
 }
 
 /* get storage max supported image dimension, return 0 if no dimension restrictions exists. */
@@ -856,17 +857,17 @@ int store(struct dt_imageio_module_storage_t *self, struct dt_imageio_module_dat
 //  return;
 //}
 
-static void _finalize_store(gpointer user_data)
+static int pwg_finalize_store(gpointer user_data)
 {
-  dt_module_imageio_storage_piwigo_ui_t *ui = (dt_module_imageio_storage_piwigo_ui_t *)user_data;
-  ui_refresh_categories(ui);
-  return;
+  //dt_module_imageio_storage_piwigo_ui_t *ui = (dt_module_imageio_storage_piwigo_ui_t *)user_data;
+  //ui_refresh_categories(ui);
+  return DT_PIWIGO_SUCCESS;
 }
 
 /* called once at the end (after exporting all images), if implemented. */
 void finalize_store(struct dt_imageio_module_storage_t *self, struct dt_imageio_module_data_t *data)
 {
-  g_main_context_invoke(NULL, _finalize_store, self->gui_data);
+  g_main_context_invoke(NULL, pwg_finalize_store, self->gui_data);
   return;
 }
 
@@ -938,10 +939,10 @@ static void pwg_login_button_clicked(GtkWidget *widget, dt_imageio_module_storag
     }
     ui->context->site = strdup(
         gtk_entry_get_text(GTK_ENTRY(ui->site)));
-    ui->context->auth->registered = pwg_login(ui->context);
+    ui->context->auth->registered = pwg_login(ui);
   }
   else  {// logging out
-    ui->context->auth->registered = !pwg_logout(ui->context); // unregister on logout success
+    ui->context->auth->registered = !pwg_logout(ui); // unregister on logout success
   }
 
   // Login status change now
@@ -962,20 +963,20 @@ static void pwg_login_button_clicked(GtkWidget *widget, dt_imageio_module_storag
   
 }
 
-static void pwg_debug(const char *format, const char *file, size_t line, ...) {
-#ifdef DT_PIWIGO_DEBUG
-  char full_format[2048];
-  va_list arglist;
-  va_start( arglist, line );
-  snprintf(full_format, 2048, "DEBUG[%s:%lu]: %s\n", file, line, format);
-  printf("\nFORMAT: %s", full_format);
-
-  printf(  "DATA  : %s\n", va_arg(arglist, char*));
-    printf(full_format, arglist);
-    va_end( arglist );
-#endif
-  return;
-}
+//static void pwg_debug(const char *format, const char *file, size_t line, ...) {
+//#ifdef DT_PIWIGO_DEBUG
+//  char full_format[2048];
+//  va_list arglist;
+//  va_start( arglist, line );
+//  snprintf(full_format, 2048, "DEBUG[%s:%lu]: %s\n", file, line, format);
+//  printf("\nFORMAT: %s", full_format);
+//
+//  printf(  "DATA  : %s\n", va_arg(arglist, char*));
+//    printf(full_format, arglist);
+//    va_end( arglist );
+//#endif
+//  return;
+//}
 
 /*
  * Returns the ID of the last category in the checked/created category path.
@@ -1129,8 +1130,8 @@ static void pwg_debug(const char *format, const char *file, size_t line, ...) {
 //    }
 //  }
   
-  return id;
-}
+//  return id;
+//}
 
 
 
