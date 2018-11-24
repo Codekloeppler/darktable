@@ -55,6 +55,7 @@ DT_MODULE(2)
 /* allow the module to initialize itself */
 static void  pwg_init(dt_module_imageio_storage_piwigo_ui_t **ui)
 {
+
   if ( !*ui )
   {
     *ui = (dt_module_imageio_storage_piwigo_ui_t *) g_malloc0(sizeof(dt_module_imageio_storage_piwigo_ui_t));
@@ -235,19 +236,24 @@ static gboolean pwg_call(dt_module_imageio_storage_piwigo_ui_t *ui, GString *res
 // defined in imagio_storage_api.h
 int version()
 {
+  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
+  dt_control_log(_("version()"));
   return DT_PIWIGO_VERSION;
 }
 
 // defined in imagio_storage_api.h
 const char *name(const struct dt_imageio_module_storage_t *self)
 {
+	  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
+	  dt_control_log(_("name()"));
   return _(DT_PIWIGO_NAME);
 }
 
 // defined in imagio_storage_api.h
 void init(dt_imageio_module_storage_t *self)
 {
-  dt_module_imageio_storage_piwigo_ui_t * ui = (dt_module_imageio_storage_piwigo_ui_t *) self->gui_data; 
+  dt_module_imageio_storage_piwigo_ui_t * ui = (dt_module_imageio_storage_piwigo_ui_t *) self->gui_data;
+  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
   dt_control_log(_("call pwg_init() inside init()"));
   pwg_init(&ui);
 }
@@ -281,6 +287,7 @@ void gui_init(struct dt_imageio_module_storage_t *self)
   GtkWidget *hboxAlbum;
   dt_module_imageio_storage_piwigo_ui_t *ui = NULL;
 
+  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
   dt_control_log(_("call pwg_init() inside gui_init()"));
   pwg_init(&ui);
   // Prevent double initialization (might be already done in init()!?)
@@ -427,6 +434,8 @@ void gui_cleanup(struct dt_imageio_module_storage_t *self)
 {
   dt_module_imageio_storage_piwigo_ui_t *ui = (dt_module_imageio_storage_piwigo_ui_t*) self->gui_data;
 
+  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
+  dt_control_log(_("gui_cleanup()"));
   if ( ui )
   {
     dt_conf_set_string("plugins/imageio/storage/piwigo/username", gtk_entry_get_text(GTK_ENTRY(ui->username)));
@@ -498,15 +507,17 @@ void gui_cleanup(struct dt_imageio_module_storage_t *self)
 void gui_reset(struct dt_imageio_module_storage_t *self)
 {
   dt_module_imageio_storage_piwigo_ui_t *ui = self->gui_data;
-  
+  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
+  dt_control_log(_("gui_reset()"));
   if ( !ui || !ui->context || !ui->context->auth )
   {
+	  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
     // something's wrong - full reset to initial state!
     gui_cleanup(self);
     dt_control_log(_("call pwg_init() inside gui_reset()"));
     pwg_init(&ui);
   }
-
+  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
   ui->context->auth->sslPeer = TRUE;
   ui->context->auth->registered = FALSE;
   ui->context->auth->username = NULL;
@@ -514,6 +525,7 @@ void gui_reset(struct dt_imageio_module_storage_t *self)
   ui->context->parser = json_parser_new ();
   ui->context->supported_file_types = NULL;
 
+  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
   // TODO - 20181102, codeklöppler: Reset gui elements content
   ui->context->site = dt_conf_get_string("plugins/imageio/storage/piwigo/site");
   if(ui->context->site)
@@ -539,7 +551,7 @@ void gui_reset(struct dt_imageio_module_storage_t *self)
   {
     gtk_entry_set_text(GTK_ENTRY(ui->album), ui->context->path);
   }
-  
+  printf("DEBUG: %s:%d - %s -- ui: %p - context: %p - auth: %p\n",__FILE__,__LINE__,__func__, ui, ui->context, ui->context->auth);
   return;
 }
 
@@ -547,8 +559,10 @@ void gui_reset(struct dt_imageio_module_storage_t *self)
 int supported(struct dt_imageio_module_storage_t *self, struct dt_imageio_module_format_t *format)
 {
   dt_module_imageio_storage_piwigo_ui_t *ui = self->gui_data;
-  int rc = DT_PIWIGO_NO;
+  int rc = DT_PIWIGO_YES;
   GString *response = g_string_new("");
+  printf("DEBUG: %s:%d - %s - registered => %s - format => %s\n",__FILE__,__LINE__,__func__, (ui->context->auth->registered ? "ja" : "nein"), (char *) format);
+  dt_control_log(_("supported()"));
   // Only call, when logged in
   if ( ui->context->auth->registered \
         && pwg_call(ui, response, NULL, DT_PIWIGO_API_SESSION_GET_STATUS) )
@@ -564,28 +578,34 @@ int supported(struct dt_imageio_module_storage_t *self, struct dt_imageio_module
       {
         JsonObject *result = json_object_get_object_member(rootObject, "rc");
         gchar * upload_file_types = strdup(json_object_get_string_member(result, "upload_file_types"));
+        printf("DEBUG: %s:%d - %s -- ui: %p - context: %p - auth: %p\n",__FILE__,__LINE__,__func__, ui, ui->context, ui->context->auth);
         if ( upload_file_types ) 
         {
           gchar * filetype = strtok(upload_file_types,",");
+          printf("DEBUG: %s:%d - %s -- ui: %p - context: %p - auth: %p\n",__FILE__,__LINE__,__func__, ui, ui->context, ui->context->auth);
           while ( filetype ) 
           {
             gchar mimetype[50] = "";
             sprintf(mimetype, "image/%s", filetype);
             if ( ( strcmp(format->mime(NULL) ,mimetype) == 0 ))
             {
+            	printf("supported format: %s\n", filetype );
               rc = DT_PIWIGO_YES;
               break;
             }
             filetype = strtok(upload_file_types, ",");
           }
           free(upload_file_types);
+          printf("DEBUG: %s:%d - %s -- ui: %p - context: %p - auth: %p\n",__FILE__,__LINE__,__func__, ui, ui->context, ui->context->auth);
         }
         else{
+        	printf("DEBUG: %s:%d - %s -- ui: %p - context: %p - auth: %p\n",__FILE__,__LINE__,__func__, ui, ui->context, ui->context->auth);
            dt_control_log(_("Not logged in with admin privileges"));
         }
       }
     }
   }
+  printf("DEBUG: %s:%d - %s -- ui: %p - context: %p - auth: %p\n",__FILE__,__LINE__,__func__, ui, ui->context, ui->context->auth);
   return rc;
 }
 
@@ -593,6 +613,8 @@ int supported(struct dt_imageio_module_storage_t *self, struct dt_imageio_module
 int dimension(struct dt_imageio_module_storage_t *self, struct dt_imageio_module_data_t *data,
               uint32_t *width, uint32_t *height)
 {
+	  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
+	  dt_control_log(_("dimension()"));
   return DT_PIWIGO_DIMENSION_MAX;
 }
         
@@ -600,60 +622,66 @@ int dimension(struct dt_imageio_module_storage_t *self, struct dt_imageio_module
 int recommended_dimension(struct dt_imageio_module_storage_t *self, struct dt_imageio_module_data_t *data,
                           uint32_t *width, uint32_t *height)
 {
+	  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
+	  dt_control_log(_("recommended dimension()"));
   return DT_PIWIGO_DIMENSION_BEST;
 }
 
 /* called once at the beginning (before exporting image), if implemented
    * can change the list of exported images (including a NULL list)
  */
-int initialize_store(struct dt_imageio_module_storage_t *self, struct dt_imageio_module_data_t *data,
-                     struct dt_imageio_module_format_t **format, struct dt_imageio_module_data_t **fdata,
-                     GList **images, const gboolean high_quality, const gboolean upscale)
-{
-  // TODO 20181102, codeklöppler: Create album path, if it does'nt exist
-  dt_module_imageio_storage_piwigo_ui_t *ui = (dt_module_imageio_storage_piwigo_ui_t*) self->gui_data;
-  //gchar *fullAlbumPath = NULL;
-  //gchar *currentAlbum = NULL;
-  //unsigned int parentCategory = 0;
-  //const gchar* delimiter = "/";
-  gboolean result = DT_PIWIGO_FAILED;
-//  GString *methodCategoryGetList = g_string_new(DT_PIWIGO_API_CATEGORY_GETLIST "&recursive=true&tree_output=true");
-  //GString *methodCategoryAdd = g_string_new(DT_PIWIGO_API_CATEGORY_ADD "&name=%s&parent=%u");
-  //GString *response = g_string_new(NULL);
-  int categoryId = -1;
-  //dt_variables_params_t *d;;
-//  d->vp->filename = input_dir;
-//      d->vp->jobcode = "export";
-//      d->vp->imgid = imgid;
-//      d->vp->sequence = num;
+//int initialize_store(struct dt_imageio_module_storage_t *self, struct dt_imageio_module_data_t *data,
+//                     struct dt_imageio_module_format_t **format, struct dt_imageio_module_data_t **fdata,
+//                     GList **images, const gboolean high_quality, const gboolean upscale)
+//{
+//  // TODO 20181102, codeklöppler: Create album path, if it does'nt exist
+//  dt_module_imageio_storage_piwigo_ui_t *ui = (dt_module_imageio_storage_piwigo_ui_t*) self->gui_data;
+//  //gchar *fullAlbumPath = NULL;
+//  //gchar *currentAlbum = NULL;
+//  //unsigned int parentCategory = 0;
+//  //const gchar* delimiter = "/";
+//  gboolean result = DT_PIWIGO_FAILED;
+////  GString *methodCategoryGetList = g_string_new(DT_PIWIGO_API_CATEGORY_GETLIST "&recursive=true&tree_output=true");
+//  //GString *methodCategoryAdd = g_string_new(DT_PIWIGO_API_CATEGORY_ADD "&name=%s&parent=%u");
+//  //GString *response = g_string_new(NULL);
+//  int categoryId = -1;
+//  //dt_variables_params_t *d;;
+////  d->vp->filename = input_dir;
+////      d->vp->jobcode = "export";
+////      d->vp->imgid = imgid;
+////      d->vp->sequence = num;
+////
 //
-  printf("UI Path: '%s'\n", gtk_entry_get_text(GTK_ENTRY(ui->album)));
-  //pwg_debug("UI Path: '%s'\n", __FILE__,__LINE__,gtk_entry_get_text(GTK_ENTRY(context->ui->album)));
-  //categoryId = pwg_createCategoryPath(context, dt_variables_expand( context->params, (char *) gtk_entry_get_text(GTK_ENTRY(context->ui->album)), TRUE));
-
-  categoryId = 0; //pwg_createCategoryPath(ui, "Exkurse/Hodenhagen");
-
-  if ( categoryId >= 0 ) {
-    result = DT_PIWIGO_SUCCESS;
-  }
-  
-  /*
-  1. Feststellen, ob der Pfad zum Album exisitert
-     a) Pfad existiert nicht -> Pfad anlegen.
-     b) Pfad existiert -> Weiter mit 2.
-  2. Für jedes zu exportierende Foto wiederholen
-     a) Fotoname setzen
-     b) author setzen
-     c) Schlagworte/tags setzen
-     d) Privacy-Level setzen
-     e) Foto hochladen
-     
-  */
-  
-  
-  return result;
-  
-}
+//  printf("UI Path: '%s'\n", gtk_entry_get_text(GTK_ENTRY(ui->album)));
+//  //pwg_debug("UI Path: '%s'\n", __FILE__,__LINE__,gtk_entry_get_text(GTK_ENTRY(context->ui->album)));
+//  //categoryId = pwg_createCategoryPath(context, dt_variables_expand( context->params, (char *) gtk_entry_get_text(GTK_ENTRY(context->ui->album)), TRUE));
+//
+//  categoryId = 0; //pwg_createCategoryPath(ui, "Exkurse/Hodenhagen");
+//  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
+//  dt_control_log(_("initialize_store()"));
+//  printf("DEBUG: %s:%d - %s - categoryId => %d\n",__FILE__,__LINE__,__func__, categoryId);
+//  if ( categoryId >= 0 ) {
+//	  printf("DEBUG: %s:%d - %s - categoryId => %d\n",__FILE__,__LINE__,__func__, categoryId);
+//    result = DT_PIWIGO_SUCCESS;
+//  }
+//
+//  /*
+//  1. Feststellen, ob der Pfad zum Album exisitert
+//     a) Pfad existiert nicht -> Pfad anlegen.
+//     b) Pfad existiert -> Weiter mit 2.
+//  2. Für jedes zu exportierende Foto wiederholen
+//     a) Fotoname setzen
+//     b) author setzen
+//     c) Schlagworte/tags setzen
+//     d) Privacy-Level setzen
+//     e) Foto hochladen
+//
+//  */
+//
+//  printf("DEBUG: %s:%d - %s :: result => %s\n",__FILE__,__LINE__,__func__, (result ? "true" : "false"));
+//  return 3;
+//
+//}
 
 /* this actually does the work */
 int store(struct dt_imageio_module_storage_t *self, struct dt_imageio_module_data_t *self_data,
@@ -671,6 +699,8 @@ int store(struct dt_imageio_module_storage_t *self, struct dt_imageio_module_dat
   GString *response = g_string_new("");
   int result = DT_PIWIGO_FAILED;
 
+  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
+  dt_control_log(_("store()"));
   if ( !context || !context->auth->registered )
   {
     return DT_PIWIGO_FAILED;
@@ -861,20 +891,24 @@ static int pwg_finalize_store(gpointer user_data)
 {
   //dt_module_imageio_storage_piwigo_ui_t *ui = (dt_module_imageio_storage_piwigo_ui_t *)user_data;
   //ui_refresh_categories(ui);
-  return DT_PIWIGO_SUCCESS;
+	  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
+	  dt_control_log(_("pwg_finalize_store()"));
+  return DT_PIWIGO_FAILED;
 }
 
 /* called once at the end (after exporting all images), if implemented. */
 void finalize_store(struct dt_imageio_module_storage_t *self, struct dt_imageio_module_data_t *data)
 {
+	  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
+	  dt_control_log(_("finalize_store()"));
   g_main_context_invoke(NULL, pwg_finalize_store, self->gui_data);
   return;
 }
 
-void *legacy_params(struct dt_imageio_module_storage_t *self, const void *const old_params,
-                    const size_t old_params_size, const int old_version, const int new_version,
-                    size_t *new_size)
+void *legacy_params(struct dt_imageio_module_storage_t *self, const void *const old_params, const size_t old_params_size, const int old_version, const int new_version, size_t *new_size)
 {
+	  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
+	  dt_control_log(_("legacy_params()"));
   return (void *)NULL;
 }
 
@@ -887,34 +921,45 @@ void *get_params(struct dt_imageio_module_storage_t *self)
 {
 	dt_module_imageio_storage_piwigo_ui_t *ui = (dt_module_imageio_storage_piwigo_ui_t *) self->gui_data;
 
+	printf("DEBUG: %s:%d - %s -- ui: %p - context: %p - auth: %p\n",__FILE__,__LINE__,__func__, ui, ui->context, ui->context->auth);
+	  dt_control_log(_("get_params()"));
   if(!ui) return NULL; // gui not initialized, CLI mode
-  if(ui->context == NULL || ui->context->auth->token == NULL)
+  printf("DEBUG: %s:%d - %s -- ui: %p - context: %p - auth: %p\n",__FILE__,__LINE__,__func__, ui, ui->context, ui->context->auth);
+  if(ui->context == NULL || !ui->context->auth->registered)
   {
+	  printf("DEBUG: %s:%d - %s -- ui: %p - context: %p - auth: %p\n",__FILE__,__LINE__,__func__, ui, ui->context, ui->context->auth);
     return NULL;
   }
-  
-  return (void *) self->gui_data;
+  printf("DEBUG: %s:%d - %s -- ui: %p - context: %p - auth: %p\n",__FILE__,__LINE__,__func__, ui, ui->context, ui->context->auth);
+  return (void *) ui->context;
 }
 
 void free_params(struct dt_imageio_module_storage_t *self, struct dt_imageio_module_data_t *data)
 {
+	  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
+	  dt_control_log(_("free_params()"));
   return;
 }
 
 int set_params(struct dt_imageio_module_storage_t *self, const void *params, const int size)
 {
+	  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
+	  dt_control_log(_("set_params()"));
   return DT_PIWIGO_SUCCESS;
 }
 
 
 void export_dispatched(struct dt_imageio_module_storage_t *self)
 {
+	  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
+	  dt_control_log(_("export_dispatched()"));
   return;
 }
 
 // On <Return> inside the password entry widget, call login button press
 static void pwg_password_entry_activated(GtkWidget *widget, dt_imageio_module_storage_t *self)
 {
+	  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
   pwg_login_button_clicked(widget, self);
 }
 
@@ -926,7 +971,7 @@ static void pwg_login_button_clicked(GtkWidget *widget, dt_imageio_module_storag
   GdkWindow * window = gtk_widget_get_parent_window (ui->login_button);
   gdk_window_set_cursor (window, cursor);
   gtk_button_set_label(GTK_BUTTON(ui->login_button), _("Wait..."));
-
+  printf("DEBUG: %s:%d - %s\n",__FILE__,__LINE__,__func__);
   do {
     // refresh button label, before continue
     g_main_context_iteration(NULL,TRUE);
