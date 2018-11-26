@@ -4,6 +4,7 @@
 #define DT_PIWIGO_SUCCESS TRUE
 #define DT_PIWIGO_NO      DT_PIWIGO_FAILED
 #define DT_PIWIGO_YES     DT_PIWIGO_SUCCESS
+#define DT_PIWIGO_FINISHED 0
 
 #define DT_PWG_POSTDATA_MAXLEN 8000         // maximum length of POST data string length
 
