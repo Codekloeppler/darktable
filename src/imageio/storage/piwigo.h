@@ -1,5 +1,5 @@
 #define DT_PIWIGO_VERSION 0                 // module version
-#define DT_PIWIGO_NAME    "Piwigo"          // module name
+#define DT_PIWIGO_NAME    "Piwigo2"        // module name
 #define DT_PIWIGO_FAILED  FALSE
 #define DT_PIWIGO_SUCCESS TRUE
 #define DT_PIWIGO_NO      DT_PIWIGO_FAILED

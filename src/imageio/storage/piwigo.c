@@ -83,7 +83,7 @@ static gboolean pwg_login(dt_module_imageio_storage_piwigo_ui_t *ui)
   gboolean result = FALSE;
   char *postbuffer = g_malloc0(DT_PWG_POSTDATA_MAXLEN);
   
-  /* specify the POST data */
+  /* specify credentials as POST data */
   snprintf(postbuffer, DT_PWG_POSTDATA_MAXLEN, "username=%s&password=%s", gtk_entry_get_text(GTK_ENTRY(ui->username)), gtk_entry_get_text(GTK_ENTRY(ui->password)));
  
   if ( pwg_call(ui, response, postbuffer, DT_PIWIGO_API_SESSION_LOGIN) )
@@ -178,7 +178,7 @@ static gboolean pwg_call(dt_module_imageio_storage_piwigo_ui_t *ui, GString *res
   // plausibility check
   if ( !ui || !ui->context || !response || !method)
   {
-    return result;
+    return DT_PIWIGO_FAILED;
   }
 
   if ( !ui->context->curl )
@@ -198,13 +198,13 @@ static gboolean pwg_call(dt_module_imageio_storage_piwigo_ui_t *ui, GString *res
     curl_easy_setopt(ui->context->curl, CURLOPT_URL, callBuffer);
 
     curl_easy_setopt(ui->context->curl, CURLOPT_ERRORBUFFER, curl_errbuf);
-    curl_easy_setopt(ui->context->curl, CURLOPT_COOKIEFILE, ""); /* start cookie engine */
+    curl_easy_setopt(ui->context->curl, CURLOPT_COOKIEFILE, ""); /* start cookie engine for session handling */
+
+    curl_easy_setopt(ui->context->curl, CURLOPT_NOPROGRESS, 1L);
+    curl_easy_setopt(ui->context->curl, CURLOPT_VERBOSE, 0L);
 #ifdef DT_PIWIGO_DEBUG
     curl_easy_setopt(ui->context->curl, CURLOPT_NOPROGRESS, 0L);
     curl_easy_setopt(ui->context->curl, CURLOPT_VERBOSE, 2L);
-#else
-    curl_easy_setopt(ui->context->curl, CURLOPT_NOPROGRESS, 1L);
-    curl_easy_setopt(ui->context->curl, CURLOPT_VERBOSE, 0L);
 #endif
 
     if (!ui->context->auth->sslPeer) {
