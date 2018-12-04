@@ -43,7 +43,7 @@
 #include "gui/gtk.h"
 #include "gui/gtkentry.h"
 #include "imageio/storage/imageio_storage_api.h"
-#include "piwigo.h"
+#include "piwigo2.h"
 
 #define DT_PIWIGO_DEBUG 1
 
